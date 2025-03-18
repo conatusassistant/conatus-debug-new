@@ -6,7 +6,7 @@ This document tracks the debugging progress for the Conatus AI Execution Platfor
 
 - **Project Status**: Major issues resolved
 - **Last Updated**: March 18, 2025
-- **Priority Issues**: All initial issues have been fixed
+- **Priority Issues**: All initial issues have been fixed, addressing additional issues as they arise
 
 ## Identified Issues
 
@@ -18,7 +18,10 @@ This document tracks the debugging progress for the Conatus AI Execution Platfor
   - `web/lib/hooks/useSuggestions.ts`
   - `web/context/AdaptiveLearningContext.tsx`
 - **Error Message**: `TypeError: client.defaultQueryOptions is not a function`
-- **Solution Implemented**: The files were updated to use the React Query v5 object parameter syntax.
+- **Solution Implemented**: 
+  - Updated the files to use the React Query v5 object parameter syntax
+  - Added explicit type annotations to the callback functions in the hooks
+  - Removed generic type parameters that were causing compatibility issues
 
 ### 2. Supabase Environment Variables
 
@@ -44,6 +47,7 @@ This document tracks the debugging progress for the Conatus AI Execution Platfor
 
 - Added React Query Provider to root layout (app/layout.tsx)
 - Updated AdaptiveLearningContext.tsx to be compatible with React Query v5 
+- Updated useSuggestions.ts with better type annotations and React Query v5 compatibility
 - Improved Supabase environment variable handling
 - Created .env.local file for development
 - Ensured all required dependencies are in package.json
