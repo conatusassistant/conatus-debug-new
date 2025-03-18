@@ -9,7 +9,14 @@ import {
   SuggestionType,
   SuggestionCategory
 } from '@/lib/suggestions';
-import { useSuggestions, useDismissSuggestion, useImplementSuggestion, useSubmitFeedback, usePreferences, useUpdatePreferences } from '@/lib/hooks/useSuggestions';
+import { 
+  useSuggestions, 
+  useDismissSuggestion, 
+  useImplementSuggestion, 
+  useSubmitFeedback, 
+  usePreferences, 
+  useUpdatePreferences 
+} from '@/lib/hooks/useModernSuggestions';
 import { trackEvent as apiTrackEvent } from '@/lib/api/learning';
 import type { TrackingEventType } from '@/lib/tracking';
 
