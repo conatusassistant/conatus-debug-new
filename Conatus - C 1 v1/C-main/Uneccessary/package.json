@@ -1,0 +1,35 @@
+{
+  "name": "conatus",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "web",
+    "backend",
+    "shared"
+  ],
+  "scripts": {
+    "dev:web": "cd web && npm run dev",
+    "dev:backend": "cd backend && npm run dev",
+    "build:web": "cd web && npm run build",
+    "build:backend": "cd backend && npm run build",
+    "start:web": "cd web && npm run start",
+    "deploy:backend": "cd backend && npm run deploy",
+    "lint": "npm run lint:web && npm run lint:backend",
+    "lint:web": "cd web && npm run lint",
+    "lint:backend": "cd backend && npm run lint",
+    "test": "npm run test:web && npm run test:backend && npm run test:integration",
+    "test:web": "cd web && npm run test",
+    "test:backend": "cd backend && npm run test",
+    "test:integration": "ts-node scripts/test-integration.ts",
+    "report:performance": "ts-node scripts/performance-report.ts",
+    "format": "prettier --write \"**/*.{js,jsx,ts,tsx,json,md}\""
+  },
+  "devDependencies": {
+    "prettier": "^3.0.0",
+    "ts-node": "^10.9.1",
+    "chalk": "^4.1.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

@@ -1,0 +1,325 @@
+# .github/workflows/backend-ci.yml
+name: Backend CI
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend-ci.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend-ci.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    services:
+      redis:
+        image: redis
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      REDIS_URL: redis://localhost:6379
+      NODE_ENV: test
+      
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci
+      
+      - name: Lint
+        working-directory: backend
+        run: npm run lint
+      
+      - name: Run unit tests
+        working-directory: backend
+        run: npm test
+      
+      - name: Run integration tests
+        working-directory: backend
+        run: npm run test:integration
+
+  build-and-deploy:
+    needs: test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    runs-on: ubuntu-latest
+    
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+      
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci
+      
+      - name: Build
+        working-directory: backend
+        run: npm run build
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+      
+      - name: Set environment-specific variables
+        id: env-vars
+        run: |
+          if [[ $GITHUB_REF == 'refs/heads/main' ]]; then
+            echo "::set-output name=environment::prod"
+          else
+            echo "::set-output name=environment::staging"
+          fi
+      
+      # Build and push Lambda functions
+      - name: Package Lambda functions
+        working-directory: backend
+        run: |
+          mkdir -p dist
+          for dir in api/routes/*; do
+            if [ -d "$dir" ]; then
+              function_name=$(basename "$dir")
+              zip -r "dist/${function_name}.zip" "$dir" "services" "utils" "node_modules" "package.json"
+            fi
+          done
+      
+      - name: Deploy Lambda functions
+        working-directory: backend
+        run: |
+          for zipfile in dist/*.zip; do
+            function_name=$(basename "$zipfile" .zip)
+            aws lambda update-function-code \
+              --function-name "conatus-${function_name}" \
+              --zip-file "fileb://${zipfile}" \
+              --region $AWS_REGION
+          done
+      
+      # Build and push worker container
+      - name: Build, tag, and push scheduled tasks worker image to Amazon ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ steps.env-vars.outputs.environment }}-${{ github.sha }}
+        working-directory: backend
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f workers/Dockerfile .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          echo "::set-output name=image::$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+      
+      - name: Update ECS service
+        run: |
+          aws ecs update-service --cluster conatus-scheduled-tasks --service conatus-scheduled-tasks --force-new-deployment
+
+# .github/workflows/frontend-ci.yml
+name: Frontend CI
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend-ci.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend-ci.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    env:
+      REACT_APP_API_URL: ${{ secrets.REACT_APP_API_URL }}
+      REACT_APP_SUPABASE_URL: ${{ secrets.REACT_APP_SUPABASE_URL }}
+      REACT_APP_SUPABASE_ANON_KEY: ${{ secrets.REACT_APP_SUPABASE_ANON_KEY }}
+      
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+      
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+      
+      - name: Run tests
+        working-directory: frontend
+        run: npm test
+
+  build-and-deploy:
+    needs: test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    runs-on: ubuntu-latest
+    
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+      
+      - name: Set environment-specific variables
+        id: env-vars
+        run: |
+          if [[ $GITHUB_REF == 'refs/heads/main' ]]; then
+            echo "::set-output name=environment::prod"
+            echo "::set-output name=s3_bucket::conatus-frontend"
+            echo "::set-output name=cloudfront_id::${{ secrets.PROD_CLOUDFRONT_ID }}"
+          else
+            echo "::set-output name=environment::staging"
+            echo "::set-output name=s3_bucket::conatus-frontend-staging"
+            echo "::set-output name=cloudfront_id::${{ secrets.STAGING_CLOUDFRONT_ID }}"
+          fi
+      
+      - name: Build
+        working-directory: frontend
+        env:
+          REACT_APP_API_URL: ${{ secrets.REACT_APP_API_URL }}
+          REACT_APP_SUPABASE_URL: ${{ secrets.REACT_APP_SUPABASE_URL }}
+          REACT_APP_SUPABASE_ANON_KEY: ${{ secrets.REACT_APP_SUPABASE_ANON_KEY }}
+          REACT_APP_ENVIRONMENT: ${{ steps.env-vars.outputs.environment }}
+        run: npm run build
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Deploy to S3
+        working-directory: frontend
+        run: |
+          aws s3 sync build/ s3://${{ steps.env-vars.outputs.s3_bucket }} --delete
+      
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation --distribution-id ${{ steps.env-vars.outputs.cloudfront_id }} --paths "/*"
+
+# .github/workflows/terraform-ci.yml
+name: Terraform CI
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'terraform/**'
+      - '.github/workflows/terraform-ci.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'terraform/**'
+      - '.github/workflows/terraform-ci.yml'
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.2.5
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Terraform Format
+        working-directory: terraform
+        run: terraform fmt -check
+      
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init
+      
+      - name: Terraform Validate
+        working-directory: terraform
+        run: terraform validate
+      
+      - name: Terraform Plan
+        working-directory: terraform
+        run: terraform plan -input=false
+        env:
+          TF_VAR_supabase_url: ${{ secrets.SUPABASE_URL }}
+          TF_VAR_supabase_service_key: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          TF_VAR_supabase_project_ref: ${{ secrets.SUPABASE_PROJECT_REF }}
+          TF_VAR_certificate_arn: ${{ secrets.ACM_CERTIFICATE_ARN }}
+          TF_VAR_alarm_email: ${{ secrets.ALARM_EMAIL }}
+      
+      - name: Terraform Apply
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        working-directory: terraform
+        run: terraform apply -auto-approve -input=false
+        env:
+          TF_VAR_supabase_url: ${{ secrets.SUPABASE_URL }}
+          TF_VAR_supabase_service_key: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          TF_VAR_supabase_project_ref: ${{ secrets.SUPABASE_PROJECT_REF }}
+          TF_VAR_certificate_arn: ${{ secrets.ACM_CERTIFICATE_ARN }}
+          TF_VAR_alarm_email: ${{ secrets.ALARM_EMAIL }}

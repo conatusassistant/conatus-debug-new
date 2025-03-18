@@ -1,0 +1,189 @@
+name: Conatus CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, staging, development ]
+  pull_request:
+    branches: [ main, staging ]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Run linter
+      run: npm run lint
+    
+    - name: Run tests
+      run: npm test
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_TEST_KEY: ${{ secrets.SUPABASE_TEST_KEY }}
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    
+    - name: Upload test coverage
+      uses: codecov/codecov-action@v3
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+
+  build-and-push:
+    name: Build and Push
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set environment variables
+      run: |
+        if [[ $GITHUB_REF == 'refs/heads/main' ]]; then
+          echo "ENV=production" >> $GITHUB_ENV
+        elif [[ $GITHUB_REF == 'refs/heads/staging' ]]; then
+          echo "ENV=staging" >> $GITHUB_ENV
+        else
+          echo "ENV=development" >> $GITHUB_ENV
+        fi
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+    
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
+    
+    # Build and push API image
+    - name: Build and push API image
+      uses: docker/build-push-action@v4
+      with:
+        context: ./backend
+        file: ./backend/Dockerfile
+        push: true
+        tags: |
+          ${{ steps.login-ecr.outputs.registry }}/conatus-api-${{ env.ENV }}:latest
+          ${{ steps.login-ecr.outputs.registry }}/conatus-api-${{ env.ENV }}:${{ github.sha }}
+    
+    # Build and push Worker image
+    - name: Build and push Worker image
+      uses: docker/build-push-action@v4
+      with:
+        context: ./backend
+        file: ./backend/Dockerfile.worker
+        push: true
+        tags: |
+          ${{ steps.login-ecr.outputs.registry }}/conatus-worker-${{ env.ENV }}:latest
+          ${{ steps.login-ecr.outputs.registry }}/conatus-worker-${{ env.ENV }}:${{ github.sha }}
+    
+    # Build frontend
+    - name: Build frontend
+      run: |
+        cd frontend
+        npm ci
+        REACT_APP_API_URL=${{ secrets[format('REACT_APP_API_URL_{0}', env.ENV)] }} \
+        REACT_APP_SUPABASE_URL=${{ secrets.SUPABASE_URL }} \
+        REACT_APP_SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }} \
+        npm run build
+    
+    # Deploy frontend to S3
+    - name: Deploy frontend to S3
+      run: |
+        aws s3 sync frontend/build/ s3://conatus-frontend-${{ env.ENV }}/ --delete
+    
+    # Invalidate CloudFront cache
+    - name: Invalidate CloudFront
+      run: |
+        if [[ $GITHUB_REF == 'refs/heads/main' ]] || [[ $GITHUB_REF == 'refs/heads/staging' ]]; then
+          aws cloudfront create-invalidation --distribution-id ${{ secrets[format('CLOUDFRONT_DISTRIBUTION_ID_{0}', env.ENV)] }} --paths "/*"
+        fi
+
+  deploy:
+    name: Deploy
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set environment variables
+      run: |
+        if [[ $GITHUB_REF == 'refs/heads/main' ]]; then
+          echo "ENV=production" >> $GITHUB_ENV
+        elif [[ $GITHUB_REF == 'refs/heads/staging' ]]; then
+          echo "ENV=staging" >> $GITHUB_ENV
+        else
+          echo "ENV=development" >> $GITHUB_ENV
+        fi
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+    
+    # Update API service
+    - name: Update API ECS service
+      run: |
+        aws ecs update-service --cluster conatus-cluster-${{ env.ENV }} \
+          --service conatus-api-service-${{ env.ENV }} \
+          --force-new-deployment
+    
+    # Update Worker service
+    - name: Update Worker ECS service
+      run: |
+        aws ecs update-service --cluster conatus-cluster-${{ env.ENV }} \
+          --service conatus-worker-service-${{ env.ENV }} \
+          --force-new-deployment
+    
+    # Monitor deployment (API)
+    - name: Monitor API deployment
+      run: |
+        aws ecs wait services-stable --cluster conatus-cluster-${{ env.ENV }} \
+          --services conatus-api-service-${{ env.ENV }}
+    
+    # Monitor deployment (Worker)
+    - name: Monitor Worker deployment
+      run: |
+        aws ecs wait services-stable --cluster conatus-cluster-${{ env.ENV }} \
+          --services conatus-worker-service-${{ env.ENV }}
+    
+    # Notify on success
+    - name: Notify deployment success
+      if: success()
+      uses: slackapi/slack-github-action@v1.23.0
+      with:
+        payload: |
+          {
+            "text": "✅ Successfully deployed Conatus ${{ env.ENV }} environment"
+          }
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+    
+    # Notify on failure
+    - name: Notify deployment failure
+      if: failure()
+      uses: slackapi/slack-github-action@v1.23.0
+      with:
+        payload: |
+          {
+            "text": "❌ Failed to deploy Conatus ${{ env.ENV }} environment"
+          }
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

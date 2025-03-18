@@ -1,0 +1,45 @@
+{
+  "name": "conatus-backend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "serverless offline",
+    "dev": "serverless offline",
+    "build": "tsc",
+    "deploy": "serverless deploy",
+    "deploy:prod": "serverless deploy --stage production",
+    "lint": "eslint . --ext .ts",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.12.0",
+    "@aws-sdk/client-s3": "^3.450.0",
+    "@aws-sdk/s3-request-presigner": "^3.450.0",
+    "@openai/api": "^1.7.3",
+    "@supabase/supabase-js": "^2.38.0",
+    "axios": "^1.6.0",
+    "ioredis": "^5.3.2",
+    "jsonwebtoken": "^9.0.2",
+    "node-cache": "^5.1.2",
+    "uuid": "^9.0.1",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.125",
+    "@types/jest": "^29.5.7",
+    "@types/jsonwebtoken": "^9.0.4",
+    "@types/node": "^20.8.10",
+    "@types/uuid": "^9.0.6",
+    "@typescript-eslint/eslint-plugin": "^6.9.1",
+    "@typescript-eslint/parser": "^6.9.1",
+    "esbuild": "^0.19.5",
+    "eslint": "^8.52.0",
+    "jest": "^29.7.0",
+    "serverless": "^3.36.0",
+    "serverless-domain-manager": "^7.1.2",
+    "serverless-esbuild": "^1.48.5",
+    "serverless-offline": "^13.2.0",
+    "ts-jest": "^29.1.1",
+    "typescript": "^5.2.2"
+  }
+}

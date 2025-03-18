@@ -1,0 +1,789 @@
+# infrastructure/terraform/main.tf
+
+provider "aws" {
+  region = var.aws_region
+}
+
+# VPC and networking
+resource "aws_vpc" "conatus_vpc" {
+  cidr_block           = "10.0.0.0/16"
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+  
+  tags = {
+    Name = "conatus-vpc-${var.environment}"
+    Environment = var.environment
+  }
+}
+
+# Public and private subnets across multiple AZs
+resource "aws_subnet" "public_subnets" {
+  count                   = length(var.availability_zones)
+  vpc_id                  = aws_vpc.conatus_vpc.id
+  cidr_block              = "10.0.${count.index + 1}.0/24"
+  availability_zone       = var.availability_zones[count.index]
+  map_public_ip_on_launch = true
+  
+  tags = {
+    Name = "conatus-public-subnet-${count.index + 1}-${var.environment}"
+    Environment = var.environment
+  }
+}
+
+resource "aws_subnet" "private_subnets" {
+  count                   = length(var.availability_zones)
+  vpc_id                  = aws_vpc.conatus_vpc.id
+  cidr_block              = "10.0.${count.index + 101}.0/24"
+  availability_zone       = var.availability_zones[count.index]
+  
+  tags = {
+    Name = "conatus-private-subnet-${count.index + 1}-${var.environment}"
+    Environment = var.environment
+  }
+}
+
+# Internet Gateway for public subnets
+resource "aws_internet_gateway" "igw" {
+  vpc_id = aws_vpc.conatus_vpc.id
+  
+  tags = {
+    Name = "conatus-igw-${var.environment}"
+    Environment = var.environment
+  }
+}
+
+# Route table for public subnets
+resource "aws_route_table" "public_route_table" {
+  vpc_id = aws_vpc.conatus_vpc.id
+  
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.igw.id
+  }
+  
+  tags = {
+    Name = "conatus-public-route-table-${var.environment}"
+    Environment = var.environment
+  }
+}
+
+# Associate public subnets with public route table
+resource "aws_route_table_association" "public_subnet_association" {
+  count          = length(aws_subnet.public_subnets)
+  subnet_id      = aws_subnet.public_subnets[count.index].id
+  route_table_id = aws_route_table.public_route_table.id
+}
+
+# S3 bucket for frontend static assets
+resource "aws_s3_bucket" "frontend_bucket" {
+  bucket = "conatus-frontend-${var.environment}"
+  acl    = "private"
+  
+  website {
+    index_document = "index.html"
+    error_document = "index.html"
+  }
+  
+  cors_rule {
+    allowed_headers = ["*"]
+    allowed_methods = ["GET"]
+    allowed_origins = ["*"]
+    max_age_seconds = 3000
+  }
+  
+  tags = {
+    Name = "conatus-frontend-${var.environment}"
+    Environment = var.environment
+  }
+}
+
+# CloudFront distribution for frontend
+resource "aws_cloudfront_distribution" "frontend_distribution" {
+  origin {
+    domain_name = aws_s3_bucket.frontend_bucket.bucket_regional_domain_name
+    origin_id   = "S3-conatus-frontend-${var.environment}"
+    
+    s3_origin_config {
+      origin_access_identity = aws_cloudfront_origin_access_identity.frontend_oai.cloudfront_access_identity_path
+    }
+  }
+  
+  enabled             = true
+  is_ipv6_enabled     = true
+  default_root_object = "index.html"
+  price_class         = "PriceClass_100"
+  
+  # Custom domain name if provided
+  aliases = var.frontend_domain != "" ? [var.frontend_domain] : []
+  
+  default_cache_behavior {
+    allowed_methods  = ["GET", "HEAD", "OPTIONS"]
+    cached_methods   = ["GET", "HEAD"]
+    target_origin_id = "S3-conatus-frontend-${var.environment}"
+    
+    forwarded_values {
+      query_string = false
+      cookies {
+        forward = "none"
+      }
+    }
+    
+    viewer_protocol_policy = "redirect-to-https"
+    min_ttl                = 0
+    default_ttl            = 3600
+    max_ttl                = 86400
+    compress               = true
+  }
+  
+  # Cache behavior for API calls
+  ordered_cache_behavior {
+    path_pattern     = "/api/*"
+    allowed_methods  = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+    cached_methods   = ["GET", "HEAD"]
+    target_origin_id = "API-Gateway"
+    
+    forwarded_values {
+      query_string = true
+      headers      = ["Authorization", "Content-Type"]
+      cookies {
+        forward = "all"
+      }
+    }
+    
+    viewer_protocol_policy = "https-only"
+    min_ttl                = 0
+    default_ttl            = 0
+    max_ttl                = 0
+  }
+  
+  # Handle SPA routing by sending all routes to index.html
+  custom_error_response {
+    error_code         = 403
+    response_code      = 200
+    response_page_path = "/index.html"
+  }
+  
+  custom_error_response {
+    error_code         = 404
+    response_code      = 200
+    response_page_path = "/index.html"
+  }
+  
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+  
+  viewer_certificate {
+    cloudfront_default_certificate = var.frontend_domain == "" ? true : false
+    acm_certificate_arn           = var.frontend_domain != "" ? var.acm_certificate_arn : null
+    ssl_support_method            = var.frontend_domain != "" ? "sni-only" : null
+    minimum_protocol_version      = var.frontend_domain != "" ? "TLSv1.2_2019" : null
+  }
+  
+  tags = {
+    Name = "conatus-distribution-${var.environment}"
+    Environment = var.environment
+  }
+}
+
+# Origin access identity for CloudFront
+resource "aws_cloudfront_origin_access_identity" "frontend_oai" {
+  comment = "OAI for Conatus Frontend"
+}
+
+# S3 bucket policy to allow CloudFront access
+resource "aws_s3_bucket_policy" "frontend_bucket_policy" {
+  bucket = aws_s3_bucket.frontend_bucket.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity ${aws_cloudfront_origin_access_identity.frontend_oai.id}"
+        }
+        Action    = "s3:GetObject"
+        Resource  = "${aws_s3_bucket.frontend_bucket.arn}/*"
+      }
+    ]
+  })
+}
+
+# IAM role for Lambda functions
+resource "aws_iam_role" "lambda_role" {
+  name = "conatus-lambda-role-${var.environment}"
+  
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+  
+  tags = {
+    Name = "conatus-lambda-role-${var.environment}"
+    Environment = var.environment
+  }
+}
+
+# IAM policy for Lambda functions
+resource "aws_iam_policy" "lambda_policy" {
+  name        = "conatus-lambda-policy-${var.environment}"
+  description = "Policy for Conatus Lambda functions"
+  
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "arn:aws:logs:*:*:*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:ListBucket"
+        ]
+        Resource = [
+          "${aws_s3_bucket.frontend_bucket.arn}",
+          "${aws_s3_bucket.frontend_bucket.arn}/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "elasticache:DescribeCacheClusters",
+          "elasticache:DescribeReplicationGroups"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# Attach policy to role
+resource "aws_iam_role_policy_attachment" "lambda_policy_attachment" {
+  role       = aws_iam_role.lambda_role.name
+  policy_arn = aws_iam_policy.lambda_policy.arn
+}
+
+# API Gateway
+resource "aws_api_gateway_rest_api" "conatus_api" {
+  name        = "conatus-api-${var.environment}"
+  description = "API Gateway for Conatus"
+  
+  endpoint_configuration {
+    types = ["REGIONAL"]
+  }
+  
+  tags = {
+    Name = "conatus-api-${var.environment}"
+    Environment = var.environment
+  }
+}
+
+# API Gateway deployment
+resource "aws_api_gateway_deployment" "conatus_api_deployment" {
+  depends_on = [
+    aws_api_gateway_integration.query_lambda_integration,
+    aws_api_gateway_integration.automation_lambda_integration,
+    aws_api_gateway_integration.auth_lambda_integration
+  ]
+  
+  rest_api_id = aws_api_gateway_rest_api.conatus_api.id
+  stage_name  = var.environment
+  
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# ElastiCache Redis cluster for caching
+resource "aws_elasticache_cluster" "redis_cluster" {
+  cluster_id           = "conatus-redis-${var.environment}"
+  engine               = "redis"
+  node_type            = "cache.t3.small"
+  num_cache_nodes      = 1
+  parameter_group_name = "default.redis6.x"
+  subnet_group_name    = aws_elasticache_subnet_group.redis_subnet_group.name
+  security_group_ids   = [aws_security_group.redis_sg.id]
+  port                 = 6379
+  
+  tags = {
+    Name = "conatus-redis-${var.environment}"
+    Environment = var.environment
+  }
+}
+
+# Redis subnet group
+resource "aws_elasticache_subnet_group" "redis_subnet_group" {
+  name       = "conatus-redis-subnet-group-${var.environment}"
+  subnet_ids = aws_subnet.private_subnets[*].id
+}
+
+# Redis security group
+resource "aws_security_group" "redis_sg" {
+  name        = "conatus-redis-sg-${var.environment}"
+  description = "Security group for Redis cluster"
+  vpc_id      = aws_vpc.conatus_vpc.id
+  
+  ingress {
+    from_port   = 6379
+    to_port     = 6379
+    protocol    = "tcp"
+    cidr_blocks = ["10.0.0.0/16"] # Only allow access from within VPC
+  }
+  
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  
+  tags = {
+    Name = "conatus-redis-sg-${var.environment}"
+    Environment = var.environment
+  }
+}
+
+# Lambda functions for each API endpoint
+# Query Lambda function
+resource "aws_lambda_function" "query_lambda" {
+  function_name = "conatus-query-${var.environment}"
+  role          = aws_iam_role.lambda_role.arn
+  handler       = "index.handler"
+  runtime       = "nodejs16.x"
+  timeout       = 30
+  memory_size   = 1024
+  
+  # Code from S3 bucket (uploaded by CI/CD pipeline)
+  s3_bucket = var.lambda_bucket
+  s3_key    = "lambda/query-${var.lambda_version}.zip"
+  
+  environment {
+    variables = {
+      SUPABASE_URL = var.supabase_url
+      SUPABASE_SERVICE_KEY = var.supabase_service_key
+      CLAUDE_API_KEY = var.claude_api_key
+      PERPLEXITY_API_KEY = var.perplexity_api_key
+      OPENAI_API_KEY = var.openai_api_key
+      DEEPSEEK_API_KEY = var.deepseek_api_key
+      REDIS_URL = "redis://${aws_elasticache_cluster.redis_cluster.cache_nodes.0.address}:${aws_elasticache_cluster.redis_cluster.cache_nodes.0.port}"
+      ENVIRONMENT = var.environment
+    }
+  }
+  
+  vpc_config {
+    subnet_ids         = aws_subnet.private_subnets[*].id
+    security_group_ids = [aws_security_group.lambda_sg.id]
+  }
+  
+  tags = {
+    Name = "conatus-query-lambda-${var.environment}"
+    Environment = var.environment
+  }
+}
+
+# Automation Lambda function
+resource "aws_lambda_function" "automation_lambda" {
+  function_name = "conatus-automation-${var.environment}"
+  role          = aws_iam_role.lambda_role.arn
+  handler       = "index.handler"
+  runtime       = "nodejs16.x"
+  timeout       = 30
+  memory_size   = 1024
+  
+  # Code from S3 bucket (uploaded by CI/CD pipeline)
+  s3_bucket = var.lambda_bucket
+  s3_key    = "lambda/automation-${var.lambda_version}.zip"
+  
+  environment {
+    variables = {
+      SUPABASE_URL = var.supabase_url
+      SUPABASE_SERVICE_KEY = var.supabase_service_key
+      REDIS_URL = "redis://${aws_elasticache_cluster.redis_cluster.cache_nodes.0.address}:${aws_elasticache_cluster.redis_cluster.cache_nodes.0.port}"
+      ENVIRONMENT = var.environment
+    }
+  }
+  
+  vpc_config {
+    subnet_ids         = aws_subnet.private_subnets[*].id
+    security_group_ids = [aws_security_group.lambda_sg.id]
+  }
+  
+  tags = {
+    Name = "conatus-automation-lambda-${var.environment}"
+    Environment = var.environment
+  }
+}
+
+# Authentication Lambda function
+resource "aws_lambda_function" "auth_lambda" {
+  function_name = "conatus-auth-${var.environment}"
+  role          = aws_iam_role.lambda_role.arn
+  handler       = "index.handler"
+  runtime       = "nodejs16.x"
+  timeout       = 30
+  memory_size   = 512
+  
+  # Code from S3 bucket (uploaded by CI/CD pipeline)
+  s3_bucket = var.lambda_bucket
+  s3_key    = "lambda/auth-${var.lambda_version}.zip"
+  
+  environment {
+    variables = {
+      SUPABASE_URL = var.supabase_url
+      SUPABASE_SERVICE_KEY = var.supabase_service_key
+      ENVIRONMENT = var.environment
+    }
+  }
+  
+  vpc_config {
+    subnet_ids         = aws_subnet.private_subnets[*].id
+    security_group_ids = [aws_security_group.lambda_sg.id]
+  }
+  
+  tags = {
+    Name = "conatus-auth-lambda-${var.environment}"
+    Environment = var.environment
+  }
+}
+
+# Lambda security group
+resource "aws_security_group" "lambda_sg" {
+  name        = "conatus-lambda-sg-${var.environment}"
+  description = "Security group for Lambda functions"
+  vpc_id      = aws_vpc.conatus_vpc.id
+  
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  
+  tags = {
+    Name = "conatus-lambda-sg-${var.environment}"
+    Environment = var.environment
+  }
+}
+
+# Scheduled Tasks Worker Lambda
+resource "aws_lambda_function" "scheduled_tasks_lambda" {
+  function_name = "conatus-scheduled-tasks-${var.environment}"
+  role          = aws_iam_role.lambda_role.arn
+  handler       = "index.handler"
+  runtime       = "nodejs16.x"
+  timeout       = 300 # 5 minutes max execution time
+  memory_size   = 512
+  
+  # Code from S3 bucket (uploaded by CI/CD pipeline)
+  s3_bucket = var.lambda_bucket
+  s3_key    = "lambda/scheduled-tasks-${var.lambda_version}.zip"
+  
+  environment {
+    variables = {
+      SUPABASE_URL = var.supabase_url
+      SUPABASE_SERVICE_KEY = var.supabase_service_key
+      REDIS_URL = "redis://${aws_elasticache_cluster.redis_cluster.cache_nodes.0.address}:${aws_elasticache_cluster.redis_cluster.cache_nodes.0.port}"
+      ENVIRONMENT = var.environment
+    }
+  }
+  
+  vpc_config {
+    subnet_ids         = aws_subnet.private_subnets[*].id
+    security_group_ids = [aws_security_group.lambda_sg.id]
+  }
+  
+  tags = {
+    Name = "conatus-scheduled-tasks-lambda-${var.environment}"
+    Environment = var.environment
+  }
+}
+
+# CloudWatch Event Rule for scheduled tasks
+resource "aws_cloudwatch_event_rule" "scheduled_tasks_rule" {
+  name                = "conatus-scheduled-tasks-rule-${var.environment}"
+  description         = "Trigger scheduled tasks worker every minute"
+  schedule_expression = "rate(1 minute)"
+  
+  tags = {
+    Name = "conatus-scheduled-tasks-rule-${var.environment}"
+    Environment = var.environment
+  }
+}
+
+# CloudWatch Event Target
+resource "aws_cloudwatch_event_target" "scheduled_tasks_target" {
+  rule      = aws_cloudwatch_event_rule.scheduled_tasks_rule.name
+  target_id = "conatus-scheduled-tasks"
+  arn       = aws_lambda_function.scheduled_tasks_lambda.arn
+}
+
+# Lambda permission for CloudWatch
+resource "aws_lambda_permission" "scheduled_tasks_permission" {
+  statement_id  = "AllowExecutionFromCloudWatch"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.scheduled_tasks_lambda.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.scheduled_tasks_rule.arn
+}
+
+# Variables file
+# infrastructure/terraform/variables.tf
+variable "aws_region" {
+  description = "AWS region to deploy resources"
+  default     = "us-west-2"
+}
+
+variable "environment" {
+  description = "Deployment environment (e.g., dev, staging, prod)"
+  default     = "dev"
+}
+
+variable "availability_zones" {
+  description = "List of availability zones to use"
+  type        = list(string)
+  default     = ["us-west-2a", "us-west-2b"]
+}
+
+variable "supabase_url" {
+  description = "Supabase URL"
+  sensitive   = true
+}
+
+variable "supabase_service_key" {
+  description = "Supabase service key"
+  sensitive   = true
+}
+
+variable "claude_api_key" {
+  description = "Claude API key"
+  sensitive   = true
+}
+
+variable "perplexity_api_key" {
+  description = "Perplexity API key"
+  sensitive   = true
+}
+
+variable "openai_api_key" {
+  description = "OpenAI API key"
+  sensitive   = true
+}
+
+variable "deepseek_api_key" {
+  description = "DeepSeek API key"
+  sensitive   = true
+}
+
+variable "lambda_bucket" {
+  description = "S3 bucket for Lambda code"
+}
+
+variable "lambda_version" {
+  description = "Version tag for Lambda code"
+}
+
+variable "frontend_domain" {
+  description = "Custom domain for frontend (optional)"
+  default     = ""
+}
+
+variable "acm_certificate_arn" {
+  description = "ARN of ACM certificate for custom domain (if used)"
+  default     = ""
+}
+
+# Sample GitHub Action workflow file
+# .github/workflows/deploy.yml
+name: Deploy Conatus
+
+on:
+  push:
+    branches:
+      - main
+      - staging
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v2
+        with:
+          node-version: '16'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Run linter
+        run: npm run lint
+      
+      - name: Run tests
+        run: npm test
+
+  build_frontend:
+    name: Build Frontend
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v2
+        with:
+          node-version: '16'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Build frontend
+        run: npm run build
+        env:
+          REACT_APP_API_URL: ${{ secrets.API_URL }}
+          REACT_APP_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          REACT_APP_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      
+      - name: Upload frontend build
+        uses: actions/upload-artifact@v2
+        with:
+          name: frontend-build
+          path: build/
+  
+  build_lambda:
+    name: Build Lambda Functions
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v2
+        with:
+          node-version: '16'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: |
+          cd backend
+          npm ci
+      
+      - name: Build Lambda functions
+        run: |
+          cd backend
+          npm run build:lambda
+      
+      - name: Upload Lambda artifacts
+        uses: actions/upload-artifact@v2
+        with:
+          name: lambda-functions
+          path: backend/dist/lambda/
+
+  deploy_dev:
+    name: Deploy to Development
+    needs: [build_frontend, build_lambda]
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    environment: development
+    steps:
+      - uses: actions/checkout@v2
+      
+      - name: Download frontend build
+        uses: actions/download-artifact@v2
+        with:
+          name: frontend-build
+          path: build
+      
+      - name: Download Lambda artifacts
+        uses: actions/download-artifact@v2
+        with:
+          name: lambda-functions
+          path: backend/dist/lambda
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+      
+      - name: Deploy frontend to S3
+        run: aws s3 sync build/ s3://conatus-frontend-dev/ --delete
+      
+      - name: Upload Lambda functions to S3
+        run: |
+          VERSION=$(echo $GITHUB_SHA | cut -c 1-8)
+          aws s3 cp backend/dist/lambda/query.zip s3://conatus-lambda-dev/lambda/query-${VERSION}.zip
+          aws s3 cp backend/dist/lambda/automation.zip s3://conatus-lambda-dev/lambda/automation-${VERSION}.zip
+          aws s3 cp backend/dist/lambda/auth.zip s3://conatus-lambda-dev/lambda/auth-${VERSION}.zip
+          aws s3 cp backend/dist/lambda/scheduled-tasks.zip s3://conatus-lambda-dev/lambda/scheduled-tasks-${VERSION}.zip
+          echo "LAMBDA_VERSION=${VERSION}" >> $GITHUB_ENV
+      
+      - name: Update Terraform variables
+        run: |
+          cd infrastructure/terraform
+          cat > terraform.tfvars << EOF
+          aws_region = "us-west-2"
+          environment = "dev"
+          supabase_url = "${{ secrets.SUPABASE_URL }}"
+          supabase_service_key = "${{ secrets.SUPABASE_SERVICE_KEY }}"
+          claude_api_key = "${{ secrets.CLAUDE_API_KEY }}"
+          perplexity_api_key = "${{ secrets.PERPLEXITY_API_KEY }}"
+          openai_api_key = "${{ secrets.OPENAI_API_KEY }}"
+          deepseek_api_key = "${{ secrets.DEEPSEEK_API_KEY }}"
+          lambda_bucket = "conatus-lambda-dev"
+          lambda_version = "${LAMBDA_VERSION}"
+          EOF
+      
+      - name: Deploy infrastructure with Terraform
+        run: |
+          cd infrastructure/terraform
+          terraform init
+          terraform apply -auto-approve
+      
+      - name: Invalidate CloudFront cache
+        run: |
+          DISTRIBUTION_ID=$(aws cloudfront list-distributions --query "DistributionList.Items[?Origins.Items[?contains(DomainName, 'conatus-frontend-dev')]].Id" --output text)
+          aws cloudfront create-invalidation --distribution-id $DISTRIBUTION_ID --paths "/*"
+      
+      - name: Deploy summary
+        run: |
+          echo "Deployed to development environment"
+          echo "Frontend URL: https://<cloudfront-domain>"
+          echo "Lambda version: ${LAMBDA_VERSION}"
+
+  deploy_prod:
+    name: Deploy to Production
+    needs: [build_frontend, build_lambda]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v2
+      
+      # Similar steps as deploy_dev but for production environment
+      # Would include production-specific configuration and additional approval steps

@@ -1,0 +1,18 @@
+# backend/workers/Dockerfile
+FROM node:16-alpine
+
+# Create app directory
+WORKDIR /usr/src/app
+
+# Install dependencies
+COPY package*.json ./
+RUN npm ci --only=production
+
+# Copy application code
+COPY . .
+
+# Set environment variables
+ENV NODE_ENV=production
+
+# Run the worker
+CMD ["node", "workers/scheduledTasksWorker.js"]

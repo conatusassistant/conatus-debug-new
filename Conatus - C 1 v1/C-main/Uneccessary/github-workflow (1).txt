@@ -1,0 +1,164 @@
+name: Conatus CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Run linting
+      run: npm run lint
+    
+    - name: Run tests
+      run: npm test
+
+  build-frontend:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+      working-directory: ./frontend
+    
+    - name: Build frontend
+      run: npm run build
+      working-directory: ./frontend
+      env:
+        REACT_APP_API_URL: ${{ secrets.API_URL }}
+        REACT_APP_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        REACT_APP_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+    
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: frontend-build
+        path: ./frontend/build
+
+  deploy-frontend:
+    needs: build-frontend
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Download build artifact
+      uses: actions/download-artifact@v3
+      with:
+        name: frontend-build
+        path: ./frontend/build
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+    
+    - name: Deploy to S3
+      run: |
+        aws s3 sync ./frontend/build s3://${{ secrets.S3_BUCKET_NAME }} --delete
+    
+    - name: Invalidate CloudFront cache
+      run: |
+        aws cloudfront create-invalidation --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} --paths "/*"
+
+  build-backend:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+      working-directory: ./backend
+    
+    - name: Create deployment package
+      run: |
+        mkdir -p deployment
+        cp -r ./backend/functions deployment/
+        cp -r ./backend/services deployment/
+        cp ./backend/package.json deployment/
+        cp ./backend/package-lock.json deployment/
+    
+    - name: Create ZIP file
+      run: |
+        cd deployment
+        zip -r ../backend-deployment.zip .
+    
+    - name: Upload deployment package
+      uses: actions/upload-artifact@v3
+      with:
+        name: backend-deployment
+        path: backend-deployment.zip
+
+  deploy-backend:
+    needs: build-backend
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Download deployment package
+      uses: actions/download-artifact@v3
+      with:
+        name: backend-deployment
+        path: ./
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+    
+    - name: Deploy to AWS Lambda
+      run: |
+        FUNCTIONS=(
+          "query-router"
+          "automation-execution"
+          "automation-detection"
+          "oauth-authorization"
+          "oauth-callback"
+        )
+        
+        for func in "${FUNCTIONS[@]}"; do
+          aws lambda update-function-code \
+            --function-name conatus-${func}-prod \
+            --zip-file fileb://backend-deployment.zip
+        done

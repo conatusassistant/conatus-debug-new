@@ -1,0 +1,193 @@
+service: conatus-learning
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs18.x
+  stage: ${opt:stage, 'dev'}
+  region: ${opt:region, 'us-east-1'}
+  environment:
+    SUPABASE_URL: ${env:SUPABASE_URL}
+    SUPABASE_SERVICE_KEY: ${env:SUPABASE_SERVICE_KEY}
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - dynamodb:PutItem
+        - dynamodb:GetItem
+        - dynamodb:UpdateItem
+        - dynamodb:Query
+        - dynamodb:Scan
+      Resource: 
+        - !GetAtt UserEventsTable.Arn
+        - !GetAtt SuggestionsTable.Arn
+        - !GetAtt UserPreferencesTable.Arn
+        - !GetAtt SuggestionFeedbackTable.Arn
+
+functions:
+  trackEvent:
+    handler: handler.trackEvent
+    events:
+      - http:
+          path: /learning/events
+          method: post
+          cors: true
+          authorizer:
+            type: jwt
+            identitySource: method.request.header.Authorization
+            issuerUrl: ${env:JWT_ISSUER}
+            audience:
+              - ${env:JWT_AUDIENCE}
+  
+  getSuggestions:
+    handler: handler.getSuggestions
+    events:
+      - http:
+          path: /learning/suggestions/{userId}
+          method: get
+          cors: true
+          authorizer:
+            type: jwt
+            identitySource: method.request.header.Authorization
+            issuerUrl: ${env:JWT_ISSUER}
+            audience:
+              - ${env:JWT_AUDIENCE}
+  
+  updateSuggestion:
+    handler: handler.updateSuggestion
+    events:
+      - http:
+          path: /learning/suggestions/{suggestionId}
+          method: patch
+          cors: true
+          authorizer:
+            type: jwt
+            identitySource: method.request.header.Authorization
+            issuerUrl: ${env:JWT_ISSUER}
+            audience:
+              - ${env:JWT_AUDIENCE}
+  
+  submitFeedback:
+    handler: handler.submitFeedback
+    events:
+      - http:
+          path: /learning/feedback
+          method: post
+          cors: true
+          authorizer:
+            type: jwt
+            identitySource: method.request.header.Authorization
+            issuerUrl: ${env:JWT_ISSUER}
+            audience:
+              - ${env:JWT_AUDIENCE}
+  
+  updatePreferences:
+    handler: handler.updatePreferences
+    events:
+      - http:
+          path: /learning/preferences/{userId}
+          method: put
+          cors: true
+          authorizer:
+            type: jwt
+            identitySource: method.request.header.Authorization
+            issuerUrl: ${env:JWT_ISSUER}
+            audience:
+              - ${env:JWT_AUDIENCE}
+  
+  getPreferences:
+    handler: handler.getPreferences
+    events:
+      - http:
+          path: /learning/preferences/{userId}
+          method: get
+          cors: true
+          authorizer:
+            type: jwt
+            identitySource: method.request.header.Authorization
+            issuerUrl: ${env:JWT_ISSUER}
+            audience:
+              - ${env:JWT_AUDIENCE}
+
+# Define resources using CloudFormation syntax
+resources:
+  Resources:
+    UserEventsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-${self:provider.stage}-user-events
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: userId
+            AttributeType: S
+          - AttributeName: timestamp
+            AttributeType: S
+        KeySchema:
+          - AttributeName: userId
+            KeyType: HASH
+          - AttributeName: timestamp
+            KeyType: RANGE
+        TimeToLiveSpecification:
+          AttributeName: ttl
+          Enabled: true
+    
+    SuggestionsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-${self:provider.stage}-suggestions
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+          - AttributeName: userId
+            AttributeType: S
+          - AttributeName: relevanceScore
+            AttributeType: N
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: userIdIndex
+            KeySchema:
+              - AttributeName: userId
+                KeyType: HASH
+              - AttributeName: relevanceScore
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+        TimeToLiveSpecification:
+          AttributeName: ttl
+          Enabled: true
+    
+    UserPreferencesTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-${self:provider.stage}-user-preferences
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: userId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: userId
+            KeyType: HASH
+    
+    SuggestionFeedbackTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-${self:provider.stage}-suggestion-feedback
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+          - AttributeName: suggestionId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: suggestionIdIndex
+            KeySchema:
+              - AttributeName: suggestionId
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL

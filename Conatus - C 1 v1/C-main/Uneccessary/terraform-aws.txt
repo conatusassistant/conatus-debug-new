@@ -1,0 +1,245 @@
+// terraform/main.tf
+provider "aws" {
+  region = var.aws_region
+}
+
+// S3 bucket for frontend hosting
+resource "aws_s3_bucket" "frontend" {
+  bucket = "${var.project_name}-frontend-${var.environment}"
+  
+  tags = {
+    Name        = "${var.project_name} Frontend"
+    Environment = var.environment
+  }
+}
+
+resource "aws_s3_bucket_website_configuration" "frontend" {
+  bucket = aws_s3_bucket.frontend.id
+
+  index_document {
+    suffix = "index.html"
+  }
+
+  error_document {
+    key = "index.html"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "frontend" {
+  bucket = aws_s3_bucket.frontend.id
+
+  block_public_acls       = false
+  block_public_policy     = false
+  ignore_public_acls      = false
+  restrict_public_buckets = false
+}
+
+resource "aws_s3_bucket_policy" "frontend" {
+  bucket = aws_s3_bucket.frontend.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "PublicReadGetObject"
+        Effect    = "Allow"
+        Principal = "*"
+        Action    = "s3:GetObject"
+        Resource  = "${aws_s3_bucket.frontend.arn}/*"
+      }
+    ]
+  })
+}
+
+// CloudFront distribution for frontend
+resource "aws_cloudfront_distribution" "frontend" {
+  origin {
+    domain_name = aws_s3_bucket_website_configuration.frontend.website_endpoint
+    origin_id   = "S3Origin"
+    
+    custom_origin_config {
+      http_port              = 80
+      https_port             = 443
+      origin_protocol_policy = "http-only"
+      origin_ssl_protocols   = ["TLSv1.2"]
+    }
+  }
+  
+  enabled             = true
+  is_ipv6_enabled     = true
+  default_root_object = "index.html"
+  
+  default_cache_behavior {
+    allowed_methods  = ["GET", "HEAD", "OPTIONS"]
+    cached_methods   = ["GET", "HEAD"]
+    target_origin_id = "S3Origin"
+    
+    forwarded_values {
+      query_string = false
+      cookies {
+        forward = "none"
+      }
+    }
+    
+    viewer_protocol_policy = "redirect-to-https"
+    min_ttl                = 0
+    default_ttl            = 3600
+    max_ttl                = 86400
+  }
+  
+  custom_error_response {
+    error_code         = 404
+    response_code      = 200
+    response_page_path = "/index.html"
+  }
+  
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+  
+  viewer_certificate {
+    cloudfront_default_certificate = true
+  }
+  
+  tags = {
+    Name        = "${var.project_name}-cloudfront"
+    Environment = var.environment
+  }
+}
+
+// API Gateway
+resource "aws_api_gateway_rest_api" "api" {
+  name        = "${var.project_name}-api-${var.environment}"
+  description = "API Gateway for ${var.project_name}"
+  
+  endpoint_configuration {
+    types = ["REGIONAL"]
+  }
+}
+
+// Lambda functions
+module "lambda_functions" {
+  source = "./modules/lambda"
+  
+  environment         = var.environment
+  project_name        = var.project_name
+  supabase_url        = var.supabase_url
+  supabase_service_key = var.supabase_service_key
+  redis_url           = var.redis_url
+  openai_api_key      = var.openai_api_key
+  claude_api_key      = var.claude_api_key
+  perplexity_api_key  = var.perplexity_api_key
+  deepseek_api_key    = var.deepseek_api_key
+}
+
+// ElastiCache Redis cluster
+resource "aws_elasticache_subnet_group" "redis" {
+  name       = "${var.project_name}-redis-subnet-group-${var.environment}"
+  subnet_ids = var.subnet_ids
+}
+
+resource "aws_elasticache_cluster" "redis" {
+  cluster_id           = "${var.project_name}-redis-${var.environment}"
+  engine               = "redis"
+  node_type            = "cache.t3.micro"
+  num_cache_nodes      = 1
+  parameter_group_name = "default.redis6.x"
+  engine_version       = "6.x"
+  port                 = 6379
+  subnet_group_name    = aws_elasticache_subnet_group.redis.name
+  security_group_ids   = [aws_security_group.redis.id]
+}
+
+resource "aws_security_group" "redis" {
+  name        = "${var.project_name}-redis-sg-${var.environment}"
+  description = "Security group for Redis"
+  vpc_id      = var.vpc_id
+
+  ingress {
+    from_port   = 6379
+    to_port     = 6379
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] // In production, restrict this to VPC CIDR
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+// Variables
+variable "aws_region" {
+  description = "AWS region to deploy resources"
+  default     = "us-east-1"
+}
+
+variable "environment" {
+  description = "Environment (dev, staging, prod)"
+  default     = "dev"
+}
+
+variable "project_name" {
+  description = "Project name"
+  default     = "conatus"
+}
+
+variable "supabase_url" {
+  description = "Supabase URL"
+}
+
+variable "supabase_service_key" {
+  description = "Supabase service key"
+  sensitive   = true
+}
+
+variable "redis_url" {
+  description = "Redis URL"
+  default     = ""
+}
+
+variable "openai_api_key" {
+  description = "OpenAI API key"
+  sensitive   = true
+}
+
+variable "claude_api_key" {
+  description = "Claude API key"
+  sensitive   = true
+}
+
+variable "perplexity_api_key" {
+  description = "Perplexity API key"
+  sensitive   = true
+}
+
+variable "deepseek_api_key" {
+  description = "DeepSeek API key"
+  sensitive   = true
+}
+
+variable "vpc_id" {
+  description = "VPC ID"
+}
+
+variable "subnet_ids" {
+  description = "Subnet IDs for Redis"
+  type        = list(string)
+}
+
+// Outputs
+output "cloudfront_domain" {
+  value = aws_cloudfront_distribution.frontend.domain_name
+}
+
+output "api_gateway_url" {
+  value = aws_api_gateway_rest_api.api.execution_arn
+}
+
+output "redis_endpoint" {
+  value = aws_elasticache_cluster.redis.cache_nodes.0.address
+}

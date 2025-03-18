@@ -1,0 +1,139 @@
+service: conatus-backend
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs18.x
+  stage: ${opt:stage, 'dev'}
+  region: ${opt:region, 'us-east-1'}
+  environment:
+    NODE_ENV: ${self:provider.stage}
+    SUPABASE_URL: ${env:SUPABASE_URL}
+    SUPABASE_SERVICE_ROLE_KEY: ${env:SUPABASE_SERVICE_ROLE_KEY}
+    REDIS_URL: ${env:REDIS_URL, "redis://localhost:6379"}
+    ANTHROPIC_API_KEY: ${env:ANTHROPIC_API_KEY}
+    OPENAI_API_KEY: ${env:OPENAI_API_KEY}
+    PERPLEXITY_API_KEY: ${env:PERPLEXITY_API_KEY}
+    DEEPSEEK_API_KEY: ${env:DEEPSEEK_API_KEY}
+    S3_BUCKET: ${env:S3_BUCKET}
+    CORS_ORIGINS: ${env:CORS_ORIGINS, "http://localhost:3000,https://conatus.app"}
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - s3:PutObject
+            - s3:GetObject
+            - s3:ListBucket
+          Resource:
+            - "arn:aws:s3:::${env:S3_BUCKET}/*"
+            - "arn:aws:s3:::${env:S3_BUCKET}"
+  httpApi:
+    cors: true
+
+plugins:
+  - serverless-esbuild
+  - serverless-offline
+  - serverless-domain-manager
+
+custom:
+  esbuild:
+    bundle: true
+    minify: ${self:custom.isProduction}
+    sourcemap: ${self:custom.isDevelopment}
+    target: 'node18'
+    define:
+      'process.env.NODE_ENV': '"${self:provider.stage}"'
+    platform: 'node'
+    concurrency: 10
+  isDevelopment: ${self:provider.stage} != 'production'
+  isProduction: ${self:provider.stage} == 'production'
+  customDomain:
+    domainName: api.${env:DOMAIN_NAME, 'conatus.app'}
+    certificateName: ${env:DOMAIN_NAME, 'conatus.app'}
+    stage: ${self:provider.stage}
+    createRoute53Record: true
+    endpointType: 'regional'
+    securityPolicy: tls_1_2
+
+functions:
+  processQuery:
+    handler: functions/query/processQuery.handler
+    events:
+      - httpApi:
+          path: /api/query
+          method: post
+    environment:
+      FUNCTION_NAME: processQuery
+  
+  streamResponse:
+    handler: functions/query/streamResponse.handler
+    events:
+      - httpApi:
+          path: /api/query/stream
+          method: post
+    environment:
+      FUNCTION_NAME: streamResponse
+  
+  createWorkflow:
+    handler: functions/automation/createWorkflow.handler
+    events:
+      - httpApi:
+          path: /api/automations
+          method: post
+    environment:
+      FUNCTION_NAME: createWorkflow
+  
+  executeAction:
+    handler: functions/automation/executeAction.handler
+    events:
+      - httpApi:
+          path: /api/automations/{id}/execute
+          method: post
+    environment:
+      FUNCTION_NAME: executeAction
+  
+  oauthConnect:
+    handler: functions/integration/oauth.handler
+    events:
+      - httpApi:
+          path: /api/services/{service}/oauth
+          method: get
+      - httpApi:
+          path: /api/services/{service}/callback
+          method: get
+    environment:
+      FUNCTION_NAME: oauthConnect
+  
+  serviceProxy:
+    handler: functions/integration/serviceProxy.handler
+    events:
+      - httpApi:
+          path: /api/services/{service}/proxy
+          method: post
+    environment:
+      FUNCTION_NAME: serviceProxy
+  
+  getUploadUrl:
+    handler: functions/upload/getSignedUrl.handler
+    events:
+      - httpApi:
+          path: /api/upload/url
+          method: post
+    environment:
+      FUNCTION_NAME: getUploadUrl
+
+resources:
+  Resources:
+    # S3 bucket for file uploads
+    UploadsBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${env:S3_BUCKET, 'conatus-uploads-${self:provider.stage}'}
+        CorsConfiguration:
+          CorsRules:
+            - AllowedHeaders: ['*']
+              AllowedMethods: [GET, PUT, POST, DELETE, HEAD]
+              AllowedOrigins: [${env:CORS_ORIGINS, "'http://localhost:3000', 'https://conatus.app'"}]
+              MaxAge: 3000

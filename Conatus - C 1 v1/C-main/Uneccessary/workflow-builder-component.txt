@@ -1,0 +1,1523 @@
+// src/components/automation/WorkflowBuilder.jsx
+import React, { useState, useEffect } from 'react';
+import { useSelector, useDispatch } from 'react-redux';
+import { 
+  createAutomation, 
+  updateAutomation, 
+  fetchServices 
+} from '../../store/automations';
+import TriggerSelector from './TriggerSelector';
+import ActionSelector from './ActionSelector';
+import ServiceConnectionPrompt from './ServiceConnectionPrompt';
+import Alert from '../common/Alert';
+import Spinner from '../common/Spinner';
+import './WorkflowBuilder.css';
+
+const WorkflowBuilder = ({ existingAutomation = null, onSave = null }) => {
+  const dispatch = useDispatch();
+  const { services, loadingServices } = useSelector(state => state.automations);
+  const [workflow, setWorkflow] = useState(initializeWorkflow());
+  const [errors, setErrors] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [showConnectionPrompt, setShowConnectionPrompt] = useState(false);
+  const [requiredService, setRequiredService] = useState(null);
+  const [isEditing, setIsEditing] = useState(false);
+
+  // Initialize workflow from existing automation or create default
+  function initializeWorkflow() {
+    if (existingAutomation) {
+      setIsEditing(true);
+      return {
+        name: existingAutomation.name,
+        description: existingAutomation.description || '',
+        trigger: existingAutomation.workflow?.trigger || { type: '', config: {} },
+        action: existingAutomation.workflow?.action || { type: '', config: {} },
+        enabled: existingAutomation.enabled !== false
+      };
+    }
+    
+    return {
+      name: '',
+      description: '',
+      trigger: { type: '', config: {} },
+      action: { type: '', config: {} },
+      enabled: true
+    };
+  }
+
+  // Fetch available services on component mount
+  useEffect(() => {
+    dispatch(fetchServices());
+  }, [dispatch]);
+
+  // Validate workflow
+  const validateWorkflow = () => {
+    const newErrors = {};
+    
+    if (!workflow.name.trim()) {
+      newErrors.name = 'Name is required';
+    }
+    
+    if (!workflow.trigger.type) {
+      newErrors.trigger = 'Please select a trigger';
+    }
+    
+    if (!workflow.action.type) {
+      newErrors.action = 'Please select an action';
+    }
+    
+    // Additional validation for specific trigger/action types
+    if (workflow.trigger.type) {
+      // Validate trigger config based on type
+      const triggerErrors = validateTriggerConfig(workflow.trigger);
+      if (triggerErrors) {
+        newErrors.triggerConfig = triggerErrors;
+      }
+    }
+    
+    if (workflow.action.type) {
+      // Validate action config based on type
+      const actionErrors = validateActionConfig(workflow.action);
+      if (actionErrors) {
+        newErrors.actionConfig = actionErrors;
+      }
+    }
+    
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  // Validate trigger configuration
+  const validateTriggerConfig = (trigger) => {
+    switch (trigger.type) {
+      case 'time_based':
+        if (!trigger.config.time) {
+          return 'Time is required';
+        }
+        break;
+      case 'recurring':
+        if (!trigger.config.schedule) {
+          return 'Schedule pattern is required';
+        }
+        break;
+      case 'event_based':
+        if (!trigger.config.eventSource) {
+          return 'Event source is required';
+        }
+        if (!trigger.config.eventType) {
+          return 'Event type is required';
+        }
+        break;
+      default:
+        return null;
+    }
+    return null;
+  };
+
+  // Validate action configuration
+  const validateActionConfig = (action) => {
+    switch (action.type) {
+      case 'message_schedule':
+        if (!action.config.recipient) {
+          return 'Recipient is required';
+        }
+        if (!action.config.content) {
+          return 'Message content is required';
+        }
+        break;
+      case 'ride_request':
+        if (!action.config.destination) {
+          return 'Destination is required';
+        }
+        break;
+      case 'calendar_event':
+        if (!action.config.title) {
+          return 'Event title is required';
+        }
+        break;
+      default:
+        return null;
+    }
+    return null;
+  };
+
+  // Check if service is connected
+  const checkServiceAvailability = (serviceId) => {
+    if (!services || loadingServices) return false;
+    
+    // Find service in the available services
+    const serviceCategory = Object.keys(services)
+      .find(category => services[category].some(s => s.id === serviceId));
+    
+    if (!serviceCategory) return false;
+    
+    const service = services[serviceCategory].find(s => s.id === serviceId);
+    return service && service.connected;
+  };
+
+  // Update workflow name
+  const handleNameChange = (e) => {
+    setWorkflow({ ...workflow, name: e.target.value });
+    
+    // Clear name error when user starts typing
+    if (errors.name) {
+      setErrors({ ...errors, name: null });
+    }
+  };
+
+  // Update workflow description
+  const handleDescriptionChange = (e) => {
+    setWorkflow({ ...workflow, description: e.target.value });
+  };
+
+  // Handle trigger selection
+  const handleTriggerSelect = (triggerType) => {
+    setWorkflow({
+      ...workflow,
+      trigger: { type: triggerType, config: {} }
+    });
+    
+    // Clear trigger error when user selects a trigger
+    if (errors.trigger) {
+      setErrors({ ...errors, trigger: null });
+    }
+  };
+
+  // Handle trigger configuration changes
+  const handleTriggerConfigChange = (config) => {
+    setWorkflow({
+      ...workflow,
+      trigger: {
+        ...workflow.trigger,
+        config: { ...workflow.trigger.config, ...config }
+      }
+    });
+    
+    // Clear trigger config error when user updates config
+    if (errors.triggerConfig) {
+      setErrors({ ...errors, triggerConfig: null });
+    }
+  };
+
+  // Handle action selection
+  const handleActionSelect = (actionType, serviceId) => {
+    // Check if the required service is connected
+    if (serviceId && !checkServiceAvailability(serviceId)) {
+      setRequiredService(serviceId);
+      setShowConnectionPrompt(true);
+      return;
+    }
+    
+    setWorkflow({
+      ...workflow,
+      action: { 
+        type: actionType, 
+        service: serviceId, 
+        config: {} 
+      }
+    });
+    
+    // Clear action error when user selects an action
+    if (errors.action) {
+      setErrors({ ...errors, action: null });
+    }
+  };
+
+  // Handle action configuration changes
+  const handleActionConfigChange = (config) => {
+    setWorkflow({
+      ...workflow,
+      action: {
+        ...workflow.action,
+        config: { ...workflow.action.config, ...config }
+      }
+    });
+    
+    // Clear action config error when user updates config
+    if (errors.actionConfig) {
+      setErrors({ ...errors, actionConfig: null });
+    }
+  };
+
+  // Handle toggle of enabled status
+  const handleEnabledToggle = (e) => {
+    setWorkflow({ ...workflow, enabled: e.target.checked });
+  };
+
+  // Handle service connection success
+  const handleServiceConnected = () => {
+    setShowConnectionPrompt(false);
+    dispatch(fetchServices()); // Refresh the services list
+  };
+
+  // Handle form submission
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    
+    // Validate form
+    if (!validateWorkflow()) {
+      return;
+    }
+    
+    setSaving(true);
+    
+    try {
+      const automationData = {
+        name: workflow.name,
+        description: workflow.description,
+        workflow: {
+          trigger: workflow.trigger,
+          action: workflow.action
+        },
+        enabled: workflow.enabled
+      };
+      
+      let result;
+      
+      if (isEditing && existingAutomation) {
+        // Update existing automation
+        result = await dispatch(updateAutomation({
+          id: existingAutomation.id,
+          ...automationData
+        })).unwrap();
+      } else {
+        // Create new automation
+        result = await dispatch(createAutomation(automationData)).unwrap();
+      }
+      
+      // Call the onSave callback if provided
+      if (onSave) {
+        onSave(result);
+      }
+      
+      // Reset form for new automation creation
+      if (!isEditing) {
+        setWorkflow(initializeWorkflow());
+      }
+    } catch (error) {
+      setErrors({
+        submit: error.message || 'Failed to save automation'
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="workflow-builder">
+      <h2>{isEditing ? 'Edit Automation' : 'Create New Automation'}</h2>
+      
+      {errors.submit && (
+        <Alert type="error" message={errors.submit} />
+      )}
+      
+      <form onSubmit={handleSubmit}>
+        {/* Basic information */}
+        <div className="form-section">
+          <h3>Basic Information</h3>
+          
+          <div className="form-group">
+            <label htmlFor="automation-name">Name</label>
+            <input
+              id="automation-name"
+              type="text"
+              value={workflow.name}
+              onChange={handleNameChange}
+              placeholder="My Automation"
+              className={errors.name ? 'input-error' : ''}
+            />
+            {errors.name && <div className="error-message">{errors.name}</div>}
+          </div>
+          
+          <div className="form-group">
+            <label htmlFor="automation-description">Description (optional)</label>
+            <textarea
+              id="automation-description"
+              value={workflow.description}
+              onChange={handleDescriptionChange}
+              placeholder="What does this automation do?"
+              rows={2}
+            />
+          </div>
+        </div>
+        
+        {/* Trigger section */}
+        <div className="form-section">
+          <h3>When this happens...</h3>
+          
+          <TriggerSelector
+            selected={workflow.trigger.type}
+            onSelect={handleTriggerSelect}
+          />
+          
+          {errors.trigger && <div className="error-message">{errors.trigger}</div>}
+          
+          {workflow.trigger.type && (
+            <div className="trigger-config">
+              <TriggerConfig
+                type={workflow.trigger.type}
+                config={workflow.trigger.config}
+                onChange={handleTriggerConfigChange}
+              />
+              
+              {errors.triggerConfig && (
+                <div className="error-message">{errors.triggerConfig}</div>
+              )}
+            </div>
+          )}
+        </div>
+        
+        {/* Action section */}
+        <div className="form-section">
+          <h3>Do this...</h3>
+          
+          <ActionSelector
+            selected={workflow.action.type}
+            onSelect={handleActionSelect}
+            services={services}
+            loadingServices={loadingServices}
+          />
+          
+          {errors.action && <div className="error-message">{errors.action}</div>}
+          
+          {workflow.action.type && (
+            <div className="action-config">
+              <ActionConfig
+                type={workflow.action.type}
+                service={workflow.action.service}
+                config={workflow.action.config}
+                onChange={handleActionConfigChange}
+              />
+              
+              {errors.actionConfig && (
+                <div className="error-message">{errors.actionConfig}</div>
+              )}
+            </div>
+          )}
+        </div>
+        
+        {/* Enabled toggle */}
+        <div className="form-group toggle-group">
+          <label htmlFor="automation-enabled" className="toggle-label">
+            <input
+              id="automation-enabled"
+              type="checkbox"
+              checked={workflow.enabled}
+              onChange={handleEnabledToggle}
+              className="toggle-input"
+            />
+            <span className="toggle-switch"></span>
+            <span className="toggle-text">Enable this automation</span>
+          </label>
+        </div>
+        
+        {/* Submit button */}
+        <div className="form-actions">
+          <button 
+            type="submit" 
+            className="primary-button"
+            disabled={saving}
+          >
+            {saving ? <Spinner size="small" /> : (isEditing ? 'Update Automation' : 'Create Automation')}
+          </button>
+        </div>
+      </form>
+      
+      {/* Service connection prompt */}
+      {showConnectionPrompt && requiredService && (
+        <ServiceConnectionPrompt
+          service={requiredService}
+          onConnected={handleServiceConnected}
+          onCancel={() => setShowConnectionPrompt(false)}
+        />
+      )}
+    </div>
+  );
+};
+
+// TriggerConfig component
+const TriggerConfig = ({ type, config, onChange }) => {
+  switch (type) {
+    case 'time_based':
+      return (
+        <div className="config-form">
+          <div className="form-group">
+            <label htmlFor="trigger-time">Time</label>
+            <input
+              id="trigger-time"
+              type="time"
+              value={config.time || ''}
+              onChange={(e) => onChange({ time: e.target.value })}
+            />
+          </div>
+          
+          <div className="form-group">
+            <label htmlFor="trigger-date">Date (optional)</label>
+            <input
+              id="trigger-date"
+              type="date"
+              value={config.date || ''}
+              onChange={(e) => onChange({ date: e.target.value })}
+            />
+          </div>
+        </div>
+      );
+      
+    case 'recurring':
+      return (
+        <div className="config-form">
+          <div className="form-group">
+            <label htmlFor="trigger-schedule">Schedule Pattern</label>
+            <select
+              id="trigger-schedule"
+              value={config.schedule || ''}
+              onChange={(e) => onChange({ schedule: e.target.value })}
+            >
+              <option value="">Select a schedule</option>
+              <option value="daily">Daily</option>
+              <option value="weekdays">Weekdays (Mon-Fri)</option>
+              <option value="weekends">Weekends (Sat-Sun)</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+            </select>
+          </div>
+          
+          {config.schedule && (
+            <div className="form-group">
+              <label htmlFor="trigger-time">Time</label>
+              <input
+                id="trigger-time"
+                type="time"
+                value={config.time || ''}
+                onChange={(e) => onChange({ time: e.target.value })}
+              />
+            </div>
+          )}
+          
+          {config.schedule === 'weekly' && (
+            <div className="form-group">
+              <label htmlFor="trigger-day">Day of the Week</label>
+              <select
+                id="trigger-day"
+                value={config.day || ''}
+                onChange={(e) => onChange({ day: e.target.value })}
+              >
+                <option value="">Select a day</option>
+                <option value="monday">Monday</option>
+                <option value="tuesday">Tuesday</option>
+                <option value="wednesday">Wednesday</option>
+                <option value="thursday">Thursday</option>
+                <option value="friday">Friday</option>
+                <option value="saturday">Saturday</option>
+                <option value="sunday">Sunday</option>
+              </select>
+            </div>
+          )}
+          
+          {config.schedule === 'monthly' && (
+            <div className="form-group">
+              <label htmlFor="trigger-date">Day of the Month</label>
+              <select
+                id="trigger-date"
+                value={config.date || ''}
+                onChange={(e) => onChange({ date: e.target.value })}
+              >
+                <option value="">Select a date</option>
+                {[...Array(31)].map((_, i) => (
+                  <option key={i + 1} value={i + 1}>
+                    {i + 1}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+      );
+      
+    case 'event_based':
+      return (
+        <div className="config-form">
+          <div className="form-group">
+            <label htmlFor="trigger-source">Event Source</label>
+            <select
+              id="trigger-source"
+              value={config.eventSource || ''}
+              onChange={(e) => onChange({ eventSource: e.target.value })}
+            >
+              <option value="">Select an event source</option>
+              <option value="email">Email</option>
+              <option value="calendar">Calendar</option>
+              <option value="location">Location</option>
+            </select>
+          </div>
+          
+          {config.eventSource === 'email' && (
+            <div className="form-group">
+              <label htmlFor="trigger-event">Email Event</label>
+              <select
+                id="trigger-event"
+                value={config.eventType || ''}
+                onChange={(e) => onChange({ eventType: e.target.value })}
+              >
+                <option value="">Select an event</option>
+                <option value="new_email">New Email Received</option>
+                <option value="email_from">Email from Specific Sender</option>
+                <option value="email_subject">Email with Specific Subject</option>
+              </select>
+              
+              {config.eventType === 'email_from' && (
+                <div className="form-group">
+                  <label htmlFor="trigger-sender">Sender Email</label>
+                  <input
+                    id="trigger-sender"
+                    type="email"
+                    value={config.sender || ''}
+                    onChange={(e) => onChange({ sender: e.target.value })}
+                    placeholder="example@email.com"
+                  />
+                </div>
+              )}
+              
+              {config.eventType === 'email_subject' && (
+                <div className="form-group">
+                  <label htmlFor="trigger-subject">Subject Contains</label>
+                  <input
+                    id="trigger-subject"
+                    type="text"
+                    value={config.subject || ''}
+                    onChange={(e) => onChange({ subject: e.target.value })}
+                    placeholder="Important, Urgent, etc."
+                  />
+                </div>
+              )}
+            </div>
+          )}
+          
+          {config.eventSource === 'calendar' && (
+            <div className="form-group">
+              <label htmlFor="trigger-event">Calendar Event</label>
+              <select
+                id="trigger-event"
+                value={config.eventType || ''}
+                onChange={(e) => onChange({ eventType: e.target.value })}
+              >
+                <option value="">Select an event</option>
+                <option value="event_start">Event Starting</option>
+                <option value="event_end">Event Ending</option>
+                <option value="event_created">New Event Created</option>
+              </select>
+              
+              {['event_start', 'event_end'].includes(config.eventType) && (
+                <div className="form-group">
+                  <label htmlFor="trigger-minutes">Minutes Before</label>
+                  <select
+                    id="trigger-minutes"
+                    value={config.minutesBefore || ''}
+                    onChange={(e) => onChange({ minutesBefore: e.target.value })}
+                  >
+                    <option value="">Select time</option>
+                    <option value="5">5 minutes</option>
+                    <option value="10">10 minutes</option>
+                    <option value="15">15 minutes</option>
+                    <option value="30">30 minutes</option>
+                    <option value="60">1 hour</option>
+                  </select>
+                </div>
+              )}
+            </div>
+          )}
+          
+          {config.eventSource === 'location' && (
+            <div className="form-group">
+              <label htmlFor="trigger-event">Location Event</label>
+              <select
+                id="trigger-event"
+                value={config.eventType || ''}
+                onChange={(e) => onChange({ eventType: e.target.value })}
+              >
+                <option value="">Select an event</option>
+                <option value="enter_location">Entering Location</option>
+                <option value="exit_location">Leaving Location</option>
+              </select>
+              
+              {['enter_location', 'exit_location'].includes(config.eventType) && (
+                <div className="form-group">
+                  <label htmlFor="trigger-location">Location Name</label>
+                  <input
+                    id="trigger-location"
+                    type="text"
+                    value={config.location || ''}
+                    onChange={(e) => onChange({ location: e.target.value })}
+                    placeholder="Home, Work, etc."
+                  />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      );
+      
+    default:
+      return <div>Select a trigger type</div>;
+  }
+};
+
+// ActionConfig component
+const ActionConfig = ({ type, service, config, onChange }) => {
+  switch (type) {
+    case 'message_schedule':
+      return (
+        <div className="config-form">
+          <div className="form-group">
+            <label htmlFor="action-recipient">Recipient</label>
+            <input
+              id="action-recipient"
+              type="text"
+              value={config.recipient || ''}
+              onChange={(e) => onChange({ recipient: e.target.value })}
+              placeholder={service === 'gmail' ? 'Email address' : 'Contact name or phone'}
+            />
+          </div>
+          
+          {service === 'gmail' && (
+            <div className="form-group">
+              <label htmlFor="action-subject">Subject</label>
+              <input
+                id="action-subject"
+                type="text"
+                value={config.subject || ''}
+                onChange={(e) => onChange({ subject: e.target.value })}
+                placeholder="Email subject"
+              />
+            </div>
+          )}
+          
+          <div className="form-group">
+            <label htmlFor="action-content">Message Content</label>
+            <textarea
+              id="action-content"
+              value={config.content || ''}
+              onChange={(e) => onChange({ content: e.target.value })}
+              placeholder="Your message here..."
+              rows={3}
+            />
+          </div>
+        </div>
+      );
+      
+    case 'ride_request':
+      return (
+        <div className="config-form">
+          <div className="form-group">
+            <label htmlFor="action-pickup">Pickup Location</label>
+            <input
+              id="action-pickup"
+              type="text"
+              value={config.pickup || ''}
+              onChange={(e) => onChange({ pickup: e.target.value })}
+              placeholder="Current location (default)"
+            />
+            <small>Leave blank to use current location</small>
+          </div>
+          
+          <div className="form-group">
+            <label htmlFor="action-destination">Destination</label>
+            <input
+              id="action-destination"
+              type="text"
+              value={config.destination || ''}
+              onChange={(e) => onChange({ destination: e.target.value })}
+              placeholder="Where to?"
+            />
+          </div>
+        </div>
+      );
+      
+    case 'calendar_event':
+      return (
+        <div className="config-form">
+          <div className="form-group">
+            <label htmlFor="action-title">Event Title</label>
+            <input
+              id="action-title"
+              type="text"
+              value={config.title || ''}
+              onChange={(e) => onChange({ title: e.target.value })}
+              placeholder="Meeting, Reminder, etc."
+            />
+          </div>
+          
+          <div className="form-group">
+            <label htmlFor="action-start">Start Time</label>
+            <input
+              id="action-start"
+              type="datetime-local"
+              value={config.startTime || ''}
+              onChange={(e) => onChange({ startTime: e.target.value })}
+            />
+          </div>
+          
+          <div className="form-group">
+            <label htmlFor="action-duration">Duration (minutes)</label>
+            <input
+              id="action-duration"
+              type="number"
+              min="1"
+              max="1440"
+              value={config.duration || '30'}
+              onChange={(e) => onChange({ duration: e.target.value })}
+            />
+          </div>
+          
+          <div className="form-group">
+            <label htmlFor="action-description">Description (optional)</label>
+            <textarea
+              id="action-description"
+              value={config.description || ''}
+              onChange={(e) => onChange({ description: e.target.value })}
+              placeholder="Event details..."
+              rows={2}
+            />
+          </div>
+        </div>
+      );
+      
+    case 'music_control':
+      return (
+        <div className="config-form">
+          <div className="form-group">
+            <label htmlFor="action-track">Song or Playlist</label>
+            <input
+              id="action-track"
+              type="text"
+              value={config.track || ''}
+              onChange={(e) => onChange({ track: e.target.value })}
+              placeholder="Song title or playlist name"
+            />
+          </div>
+          
+          <div className="form-group">
+            <label htmlFor="action-artist">Artist (optional)</label>
+            <input
+              id="action-artist"
+              type="text"
+              value={config.artist || ''}
+              onChange={(e) => onChange({ artist: e.target.value })}
+              placeholder="Artist name"
+            />
+          </div>
+        </div>
+      );
+      
+    case 'payment':
+      return (
+        <div className="config-form">
+          <div className="form-group">
+            <label htmlFor="action-amount">Amount</label>
+            <div className="input-with-prefix">
+              <span className="input-prefix">$</span>
+              <input
+                id="action-amount"
+                type="number"
+                min="0.01"
+                step="0.01"
+                value={config.amount || ''}
+                onChange={(e) => onChange({ amount: e.target.value })}
+                placeholder="0.00"
+              />
+            </div>
+          </div>
+          
+          <div className="form-group">
+            <label htmlFor="action-recipient">Recipient</label>
+            <input
+              id="action-recipient"
+              type="text"
+              value={config.recipient || ''}
+              onChange={(e) => onChange({ recipient: e.target.value })}
+              placeholder="Friend's name, phone, or email"
+            />
+          </div>
+          
+          <div className="form-group">
+            <label htmlFor="action-description">Description (optional)</label>
+            <input
+              id="action-description"
+              type="text"
+              value={config.description || ''}
+              onChange={(e) => onChange({ description: e.target.value })}
+              placeholder="What is this payment for?"
+            />
+          </div>
+        </div>
+      );
+      
+    default:
+      return <div>Select an action type</div>;
+  }
+};
+
+// src/components/automation/TriggerSelector.jsx
+import React from 'react';
+import './TriggerSelector.css';
+
+const TriggerSelector = ({ selected, onSelect }) => {
+  // Trigger types
+  const triggers = [
+    {
+      id: 'time_based',
+      name: 'Time-based',
+      description: 'Trigger at a specific time',
+      icon: '🕒'
+    },
+    {
+      id: 'recurring',
+      name: 'Recurring',
+      description: 'Repeat on a schedule',
+      icon: '🔄'
+    },
+    {
+      id: 'event_based',
+      name: 'Event-based',
+      description: 'Respond to events like emails or calendar',
+      icon: '📅'
+    }
+  ];
+  
+  return (
+    <div className="trigger-selector">
+      {triggers.map(trigger => (
+        <div
+          key={trigger.id}
+          className={`trigger-card ${selected === trigger.id ? 'selected' : ''}`}
+          onClick={() => onSelect(trigger.id)}
+        >
+          <div className="trigger-icon">{trigger.icon}</div>
+          <div className="trigger-details">
+            <h4>{trigger.name}</h4>
+            <p>{trigger.description}</p>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+export default TriggerSelector;
+
+// src/components/automation/ActionSelector.jsx
+import React, { useState } from 'react';
+import './ActionSelector.css';
+import Spinner from '../common/Spinner';
+
+const ActionSelector = ({ selected, onSelect, services, loadingServices }) => {
+  const [selectedCategory, setSelectedCategory] = useState('all');
+  
+  // Action categories
+  const categories = [
+    { id: 'all', name: 'All Actions' },
+    { id: 'communication', name: 'Communication' },
+    { id: 'transportation', name: 'Transportation' },
+    { id: 'productivity', name: 'Productivity' },
+    { id: 'entertainment', name: 'Entertainment' },
+    { id: 'financial', name: 'Financial' }
+  ];
+  
+  // Action types
+  const actions = [
+    {
+      id: 'message_schedule',
+      name: 'Send Message',
+      description: 'Send a message via WhatsApp, SMS, or Email',
+      icon: '✉️',
+      category: 'communication',
+      services: ['whatsapp', 'gmail']
+    },
+    {
+      id: 'ride_request',
+      name: 'Request Ride',
+      description: 'Book a ride with Uber',
+      icon: '🚗',
+      category: 'transportation',
+      services: ['uber']
+    },
+    {
+      id: 'calendar_event',
+      name: 'Create Calendar Event',
+      description: 'Add an event to your calendar',
+      icon: '📅',
+      category: 'productivity',
+      services: ['google_calendar']
+    },
+    {
+      id: 'music_control',
+      name: 'Play Music',
+      description: 'Play music on Spotify',
+      icon: '🎵',
+      category: 'entertainment',
+      services: ['spotify']
+    },
+    {
+      id: 'payment',
+      name: 'Send Payment',
+      description: 'Send money with Venmo',
+      icon: '💸',
+      category: 'financial',
+      services: ['venmo']
+    }
+  ];
+  
+  // Filter actions by category
+  const filteredActions = selectedCategory === 'all'
+    ? actions
+    : actions.filter(action => action.category === selectedCategory);
+  
+  // Handle selecting a service for an action
+  const handleActionSelect = (action) => {
+    if (action.services && action.services.length === 1) {
+      // If there's only one service option, select it automatically
+      onSelect(action.id, action.services[0]);
+    } else if (action.services && action.services.length > 1) {
+      // If there are multiple service options, show service selection
+      // For simplicity in this example, we'll just select the first service
+      onSelect(action.id, action.services[0]);
+    } else {
+      // If no service is required, just select the action
+      onSelect(action.id);
+    }
+  };
+  
+  return (
+    <div className="action-selector">
+      {/* Category tabs */}
+      <div className="category-tabs">
+        {categories.map(category => (
+          <button
+            key={category.id}
+            className={`category-tab ${selectedCategory === category.id ? 'active' : ''}`}
+            onClick={() => setSelectedCategory(category.id)}
+          >
+            {category.name}
+          </button>
+        ))}
+      </div>
+      
+      {/* Action cards */}
+      {loadingServices ? (
+        <div className="loading-container">
+          <Spinner />
+          <p>Loading available services...</p>
+        </div>
+      ) : (
+        <div className="action-cards">
+          {filteredActions.map(action => (
+            <div
+              key={action.id}
+              className={`action-card ${selected === action.id ? 'selected' : ''}`}
+              onClick={() => handleActionSelect(action)}
+            >
+              <div className="action-icon">{action.icon}</div>
+              <div className="action-details">
+                <h4>{action.name}</h4>
+                <p>{action.description}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default ActionSelector;
+
+// src/components/automation/ServiceConnectionPrompt.jsx
+import React, { useState } from 'react';
+import { useDispatch } from 'react-redux';
+import { connectService } from '../../store/integrations';
+import Modal from '../common/Modal';
+import Spinner from '../common/Spinner';
+import './ServiceConnectionPrompt.css';
+
+const ServiceConnectionPrompt = ({ service, onConnected, onCancel }) => {
+  const dispatch = useDispatch();
+  const [connecting, setConnecting] = useState(false);
+  const [error, setError] = useState(null);
+  
+  // Service display names
+  const serviceNames = {
+    'whatsapp': 'WhatsApp',
+    'gmail': 'Gmail',
+    'uber': 'Uber',
+    'google_calendar': 'Google Calendar',
+    'spotify': 'Spotify',
+    'venmo': 'Venmo'
+  };
+  
+  // Service icons
+  const serviceIcons = {
+    'whatsapp': '💬',
+    'gmail': '✉️',
+    'uber': '🚗',
+    'google_calendar': '📅',
+    'spotify': '🎵',
+    'venmo': '💸'
+  };
+  
+  const handleConnect = async () => {
+    setConnecting(true);
+    setError(null);
+    
+    try {
+      // Initiate OAuth flow
+      const result = await dispatch(connectService(service)).unwrap();
+      
+      // Handle OAuth popup
+      window.open(result.authUrl, `Connect ${serviceNames[service]}`, 'width=600,height=700');
+      
+      // Listen for message from popup
+      const messageHandler = (event) => {
+        if (event.data.type === 'OAUTH_SUCCESS' && event.data.service === service) {
+          window.removeEventListener('message', messageHandler);
+          setConnecting(false);
+          onConnected();
+        } else if (event.data.type === 'OAUTH_ERROR' && event.data.service === service) {
+          window.removeEventListener('message', messageHandler);
+          setConnecting(false);
+          setError(event.data.error || 'Failed to connect service');
+        }
+      };
+      
+      window.addEventListener('message', messageHandler);
+    } catch (error) {
+      setConnecting(false);
+      setError(error.message || 'Failed to initiate connection');
+    }
+  };
+  
+  return (
+    <Modal onClose={onCancel}>
+      <div className="service-connection-prompt">
+        <div className="service-icon">{serviceIcons[service] || '🔌'}</div>
+        <h3>Connect {serviceNames[service] || service}</h3>
+        <p>
+          This automation requires {serviceNames[service] || service} to work.
+          Please connect it to continue.
+        </p>
+        
+        {error && (
+          <div className="connection-error">
+            {error}
+          </div>
+        )}
+        
+        <div className="connection-actions">
+          <button
+            className="secondary-button"
+            onClick={onCancel}
+            disabled={connecting}
+          >
+            Cancel
+          </button>
+          <button
+            className="primary-button"
+            onClick={handleConnect}
+            disabled={connecting}
+          >
+            {connecting ? <Spinner size="small" /> : `Connect ${serviceNames[service] || service}`}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+};
+
+export default ServiceConnectionPrompt;
+
+// src/components/automation/WorkflowBuilder.css
+.workflow-builder {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 1.5rem;
+  background-color: #ffffff;
+  border-radius: 0.5rem;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+}
+
+.workflow-builder h2 {
+  margin-top: 0;
+  margin-bottom: 1.5rem;
+  font-size: 1.5rem;
+  color: #333;
+}
+
+.form-section {
+  margin-bottom: 2rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid #eaeaea;
+}
+
+.form-section h3 {
+  margin-top: 0;
+  margin-bottom: 1rem;
+  font-size: 1.2rem;
+  color: #555;
+}
+
+.form-group {
+  margin-bottom: 1rem;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 500;
+  color: #555;
+}
+
+.form-group input[type="text"],
+.form-group input[type="email"],
+.form-group input[type="number"],
+.form-group input[type="time"],
+.form-group input[type="date"],
+.form-group input[type="datetime-local"],
+.form-group textarea,
+.form-group select {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid #ddd;
+  border-radius: 0.25rem;
+  font-size: 1rem;
+  transition: border-color 0.2s;
+}
+
+.form-group input:focus,
+.form-group textarea:focus,
+.form-group select:focus {
+  border-color: #3b82f6;
+  outline: none;
+}
+
+.input-error {
+  border-color: #ef4444 !important;
+}
+
+.error-message {
+  margin-top: 0.5rem;
+  color: #ef4444;
+  font-size: 0.875rem;
+}
+
+.toggle-group {
+  margin-top: 1.5rem;
+}
+
+.toggle-label {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.toggle-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 50px;
+  height: 24px;
+  background-color: #ccc;
+  border-radius: 24px;
+  transition: background-color 0.2s;
+}
+
+.toggle-switch:before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+
+.toggle-input:checked + .toggle-switch {
+  background-color: #3b82f6;
+}
+
+.toggle-input:checked + .toggle-switch:before {
+  transform: translateX(26px);
+}
+
+.toggle-text {
+  margin-left: 0.75rem;
+  font-weight: 500;
+}
+
+.form-actions {
+  margin-top: 2rem;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.primary-button {
+  padding: 0.75rem 1.5rem;
+  background-color: #3b82f6;
+  color: white;
+  border: none;
+  border-radius: 0.25rem;
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.primary-button:hover {
+  background-color: #2563eb;
+}
+
+.primary-button:disabled {
+  background-color: #93c5fd;
+  cursor: not-allowed;
+}
+
+.secondary-button {
+  padding: 0.75rem 1.5rem;
+  background-color: #f3f4f6;
+  color: #374151;
+  border: 1px solid #d1d5db;
+  border-radius: 0.25rem;
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  margin-right: 1rem;
+}
+
+.secondary-button:hover {
+  background-color: #e5e7eb;
+}
+
+.secondary-button:disabled {
+  background-color: #f9fafb;
+  color: #9ca3af;
+  cursor: not-allowed;
+}
+
+.trigger-config,
+.action-config {
+  margin-top: 1rem;
+  padding: 1rem;
+  background-color: #f9fafb;
+  border-radius: 0.25rem;
+  border: 1px solid #eaeaea;
+}
+
+.config-form {
+  display: grid;
+  gap: 1rem;
+}
+
+.input-with-prefix {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.input-prefix {
+  position: absolute;
+  left: 0.75rem;
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.input-with-prefix input {
+  padding-left: 1.75rem !important;
+}
+
+small {
+  display: block;
+  margin-top: 0.25rem;
+  color: #6b7280;
+  font-size: 0.75rem;
+}
+
+.loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  background-color: #f9fafb;
+  border-radius: 0.25rem;
+  text-align: center;
+}
+
+/* Additional styles for TriggerSelector and ActionSelector are in their respective CSS files */
+
+// src/components/automation/TriggerSelector.css
+.trigger-selector {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 1rem;
+}
+
+.trigger-card {
+  display: flex;
+  align-items: center;
+  padding: 1rem;
+  background-color: #f9fafb;
+  border: 1px solid #eaeaea;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.trigger-card:hover {
+  background-color: #f3f4f6;
+  border-color: #d1d5db;
+}
+
+.trigger-card.selected {
+  background-color: #ebf5ff;
+  border-color: #3b82f6;
+}
+
+.trigger-icon {
+  font-size: 1.5rem;
+  margin-right: 1rem;
+}
+
+.trigger-details {
+  flex: 1;
+}
+
+.trigger-details h4 {
+  margin: 0 0 0.25rem 0;
+  font-size: 1rem;
+}
+
+.trigger-details p {
+  margin: 0;
+  font-size: 0.875rem;
+  color: #6b7280;
+}
+
+// src/components/automation/ActionSelector.css
+.action-selector {
+  display: flex;
+  flex-direction: column;
+}
+
+.category-tabs {
+  display: flex;
+  overflow-x: auto;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid #eaeaea;
+}
+
+.category-tab {
+  padding: 0.75rem 1rem;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #6b7280;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.category-tab.active {
+  color: #3b82f6;
+  border-bottom-color: #3b82f6;
+}
+
+.action-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 1rem;
+}
+
+.action-card {
+  display: flex;
+  align-items: center;
+  padding: 1rem;
+  background-color: #f9fafb;
+  border: 1px solid #eaeaea;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.action-card:hover {
+  background-color: #f3f4f6;
+  border-color: #d1d5db;
+}
+
+.action-card.selected {
+  background-color: #ebf5ff;
+  border-color: #3b82f6;
+}
+
+.action-icon {
+  font-size: 1.5rem;
+  margin-right: 1rem;
+}
+
+.action-details {
+  flex: 1;
+}
+
+.action-details h4 {
+  margin: 0 0 0.25rem 0;
+  font-size: 1rem;
+}
+
+.action-details p {
+  margin: 0;
+  font-size: 0.875rem;
+  color: #6b7280;
+}
+
+// src/components/automation/ServiceConnectionPrompt.css
+.service-connection-prompt {
+  padding: 1.5rem;
+  text-align: center;
+}
+
+.service-icon {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+}
+
+.service-connection-prompt h3 {
+  margin-top: 0;
+  margin-bottom: 1rem;
+  font-size: 1.25rem;
+}
+
+.service-connection-prompt p {
+  margin-bottom: 1.5rem;
+  color: #6b7280;
+}
+
+.connection-error {
+  margin: 1rem 0;
+  padding: 0.75rem;
+  background-color: #fee2e2;
+  color: #b91c1c;
+  border-radius: 0.25rem;
+}
+
+.connection-actions {
+  display: flex;
+  justify-content: center;
+  gap: 1rem;
+}
