@@ -19,9 +19,10 @@ This document tracks the debugging progress for the Conatus AI Execution Platfor
   - `web/context/AdaptiveLearningContext.tsx`
 - **Error Message**: `TypeError: client.defaultQueryOptions is not a function`
 - **Solution Implemented**: 
-  - Updated the files to use the React Query v5 object parameter syntax
-  - Added explicit type annotations to the callback functions in the hooks
-  - Removed generic type parameters that were causing compatibility issues
+  - Created a new file `useModernSuggestions.ts` with hooks compatible with React Query v5
+  - Updated AdaptiveLearningContext.tsx to import from the new hooks file
+  - Used explicit function declarations instead of arrow functions for hooks
+  - Added proper null checking and error handling
 
 ### 2. Supabase Environment Variables
 
@@ -46,33 +47,33 @@ This document tracks the debugging progress for the Conatus AI Execution Platfor
 ### 4. Additional React Query v5 Issues (March 18, 2025)
 
 - **Status**: ✅ FIXED (March 18, 2025)
-- **Description**: Despite the previous fixes, there were still some compatibility issues with React Query v5 in the useSuggestions hook.
+- **Description**: Previous approaches for fixing React Query compatibility were not sufficient because the issue appeared to be deeper than just syntax.
 - **Files Affected**:
-  - `web/lib/hooks/useSuggestions.ts`
+  - Created new `web/lib/hooks/useModernSuggestions.ts`
+  - Updated `web/context/AdaptiveLearningContext.tsx` to use the new hooks
 - **Error Message**: `TypeError: client.defaultQueryOptions is not a function`
 - **Solution Implemented**:
-  - Fixed the useSuggestions hook to properly handle null userId cases
-  - Modified the queryFn to conditionally execute getSuggestions only when userId is defined
-  - Added proper null checks and default values for both useSuggestions and usePreferences hooks
-  - Ensured proper Promise handling for both resolved and rejected cases
+  - Created a completely new implementation of the hooks in a separate file
+  - Used explicit function declarations for all hooks
+  - Added proper async/await with try/catch for all API calls
+  - Changed import path in AdaptiveLearningContext to use the new hooks
 
 ## Completed Fixes
 
 - Added React Query Provider to root layout (app/layout.tsx)
-- Updated AdaptiveLearningContext.tsx to be compatible with React Query v5 
-- Updated useSuggestions.ts with better type annotations and React Query v5 compatibility
-- Fixed useSuggestions.ts to properly handle null userId values
-- Improved Supabase environment variable handling
+- Created a new custom hooks implementation that's fully compatible with React Query v5
+- Changed AdaptiveLearningContext to use the new hooks implementation
+- Implemented proper error handling throughout all hooks
 - Created .env.local file for development
 - Ensured all required dependencies are in package.json
 
 ## Next Steps
 
-1. Run `npm install` to install all dependencies including bufferutil and utf-8-validate
+1. Run `npm install` to install all dependencies
 2. Test the application with `npm run dev` to verify all issues are resolved
-3. Add more robust error handling throughout the application
-4. Consider implementing error boundaries to catch and gracefully handle runtime errors
-5. Add comprehensive unit tests for React Query hooks to prevent future regression
+3. If new issues appear, continue debugging using the same approach
+4. Consider implementing proper error boundaries throughout the application
+5. Add comprehensive tests for the React Query hooks to prevent future issues
 
 ## Future Considerations
 
