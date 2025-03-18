@@ -30,9 +30,9 @@ export const useDismissSuggestion = () => {
       dismissSuggestion(suggestionId, userId),
     onSuccess: (_, variables) => {
       // Update suggestions query data
-      queryClient.setQueryData<Suggestion[] | undefined>(
+      queryClient.setQueryData(
         ['suggestions', variables.userId],
-        (oldData) => {
+        (oldData: Suggestion[] | undefined) => {
           if (!oldData) return [];
           // Remove the dismissed suggestion
           return oldData.filter(
@@ -54,9 +54,9 @@ export const useImplementSuggestion = () => {
       implementSuggestion(suggestionId, userId),
     onSuccess: (_, variables) => {
       // Update suggestions query data
-      queryClient.setQueryData<Suggestion[] | undefined>(
+      queryClient.setQueryData(
         ['suggestions', variables.userId],
-        (oldData) => {
+        (oldData: Suggestion[] | undefined) => {
           if (!oldData) return [];
           // Remove the implemented suggestion
           return oldData.filter(
