@@ -10,9 +10,13 @@ The main issue was that the codebase was using older React Query v4 syntax while
 
 **Files Modified:**
 - `web/context/AdaptiveLearningContext.tsx`
-- `web/lib/hooks/useSuggestions.ts` (was already updated correctly)
+- `web/lib/hooks/useSuggestions.ts`
 
-In particular, the old pattern using `client.defaultQueryOptions` is not available in v5, and this was causing the main error. We've made comprehensive fixes to ensure all React Query calls use the new object parameter syntax.
+In particular, we fixed the following problems:
+- Updated all React Query hooks to use object parameter syntax
+- The `client.defaultQueryOptions` function is not available in v5, which was causing the error
+- Added improved null handling in the hooks
+- Fixed queryFn implementations to properly handle cases where userId might be undefined
 
 ### 2. Fixed Supabase Environment Variables Issue
 
@@ -76,14 +80,15 @@ Follow these steps to finalize the fixes:
 
 1. **Issue Identification**: The error message "TypeError: client.defaultQueryOptions is not a function" indicated that we were using React Query v4 syntax with React Query v5.
 
-2. **Files Fixed**:
-   - Updated `AdaptiveLearningContext.tsx` to ensure all React Query operations use the object parameter syntax required for v5.
-   - Verified that `useSuggestions.ts` was already updated correctly to the v5 syntax.
+2. **Root Cause Analysis**: The useSuggestions hook was using React Query v5 object syntax, but had some implementation issues:
+   - It was calling getSuggestions(userId!) without checking if userId was defined
+   - The hook wasn't properly preparing for null cases
+   - The error handling wasn't robust in case of API failures
 
 3. **Key Changes**:
-   - Changed from positional parameters to object parameters in query and mutation calls
-   - Updated typings where necessary
-   - Removed usage of deprecated methods like `client.defaultQueryOptions`
+   - Modified queryFn to properly handle null userId with conditional logic
+   - Added explicit Promise.resolve() for default/fallback values
+   - Improved error handling for both hooks
 
 ### Supabase Environment Variables
 
@@ -104,19 +109,23 @@ Follow these steps to finalize the fixes:
 ## Additional Recommendations
 
 1. **Error Handling:**
-   - Add better error handling for Supabase client creation
-   - Implement error boundaries in React components to prevent cascading failures
+   - Add React Error Boundaries to catch and handle errors at component level
+   - Implement more robust error states for API calls
+   - Add proper fallbacks when network requests fail
 
-2. **Dependency Management:**
-   - Consider adding `optional: true` for the optional dependencies in package.json
-   - Add proper fallbacks for missing optional dependencies
+2. **Testing:**
+   - Add unit tests for React Query hooks
+   - Implement integration tests for critical flows
+   - Add error simulation tests to verify error handling
 
-3. **Environment Variables:**
-   - For production, remove hardcoded fallback values
-   - Implement runtime configuration checking
+3. **Performance:**
+   - Review React Query's staleTime settings for optimization
+   - Implement proper loading states for all data fetching
+   - Consider implementing skeleton loaders for better UX
 
-4. **Testing:**
-   - Add integration tests for the critical authentication and data fetching flows
-   - Implement unit tests for the React Query hooks
+4. **TypeScript:**
+   - Enable stricter TypeScript checks
+   - Add proper type definitions for all API responses
+   - Consider using zod or similar for runtime validation
 
 See the full `DEBUG_LOG.md` for more detailed information on the fixes and future considerations.
