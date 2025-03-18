@@ -1,27 +1,26 @@
 import { createClient } from '@supabase/supabase-js';
 import { Database } from './types';
 
-// Add these debugging lines
-console.log("Environment variables check:");
-console.log("URL:", process.env.NEXT_PUBLIC_SUPABASE_URL);
-console.log("KEY:", process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+// Define fallback values for development only
+// These should be replaced with proper environment variables in production
+const FALLBACK_URL = "https://rtukhuijpcljqzqkqoxz.supabase.co";
+const FALLBACK_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ0dWtodWlqcGNsanF6cWtxb3h6Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjMyMjAwOCwiZXhwIjoyMDU3ODk4MDA4fQ.cP1BcOP1lJ_3f0UDLIE5iu1puNXWwlf-gLEUGW5-Jx4";
 
-// Define hardcoded values
-const HARDCODED_URL = "https://rtukhuijpcljqzqkqoxz.supabase.co";
-const HARDCODED_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ0dWtodWlqcGNsanF6cWtxb3h6Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjMyMjAwOCwiZXhwIjoyMDU3ODk4MDA4fQ.cP1BcOP1lJ_3f0UDLIE5iu1puNXWwlf-gLEUGW5-Jx4";  // Replace with your actual key
+// Check if environment variables are present
+const isEnvMissing = typeof process.env.NEXT_PUBLIC_SUPABASE_URL !== 'string' || 
+                    typeof process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY !== 'string';
 
-// Use environment variables if available, otherwise use hardcoded values
-const supabaseUrl = typeof process.env.NEXT_PUBLIC_SUPABASE_URL === 'string' 
-  ? process.env.NEXT_PUBLIC_SUPABASE_URL 
-  : HARDCODED_URL;
+// Use environment variables if available, otherwise use fallback values
+const supabaseUrl = isEnvMissing ? FALLBACK_URL : process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseAnonKey = isEnvMissing ? FALLBACK_KEY : process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-const supabaseAnonKey = typeof process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY === 'string'
-  ? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  : HARDCODED_KEY;
-
-console.log("Final values being used:");
-console.log("URL:", supabaseUrl);
-console.log("KEY:", supabaseAnonKey);
+// Log only in development environment
+if (process.env.NODE_ENV === 'development' && isEnvMissing) {
+  console.warn(
+    "Supabase environment variables are missing. Using fallback values for development. " +
+    "Make sure to create a .env.local file with NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY for production."
+  );
+}
 
 /**
  * Create a Supabase client for use in the browser.
