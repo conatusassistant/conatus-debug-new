@@ -9,7 +9,7 @@ Copy and paste this exact prompt at the beginning of each new Claude session:
 ```
 I'm working on debugging the Conatus AI Execution Platform. Please help me continue the debugging process by:
 
-1. Checking the latest state of the repository at https://github.com/conatusassistant/conatus-debug-new
+1. Checking the latest state of the repository at https://github.com/conatusassistant/conatus-debug
 2. Reading the DEBUG_LOG.md file to understand what's been fixed and what still needs fixing
 3. Reading any error messages I provide
 4. Giving me step-by-step solutions to resolve the current issues
