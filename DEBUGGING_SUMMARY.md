@@ -12,7 +12,7 @@ The main issue was that the codebase was using older React Query v4 syntax while
 - `web/context/AdaptiveLearningContext.tsx`
 - `web/lib/hooks/useSuggestions.ts` (was already updated correctly)
 
-In particular, the old pattern using `client.defaultQueryOptions` is not available in v5, and this was causing the main error.
+In particular, the old pattern using `client.defaultQueryOptions` is not available in v5, and this was causing the main error. We've made comprehensive fixes to ensure all React Query calls use the new object parameter syntax.
 
 ### 2. Fixed Supabase Environment Variables Issue
 
@@ -53,8 +53,8 @@ Follow these steps to finalize the fixes:
    
    This will install all dependencies including the optional ones (`bufferutil` and `utf-8-validate`).
 
-3. **Create or verify the .env.local file:**
-   The `.env.local` file has been created in the repository with the necessary values. Verify it exists in the web directory:
+3. **Verify the .env.local file:**
+   The `.env.local` file has been created in the repository with the necessary values:
    ```
    NEXT_PUBLIC_SUPABASE_URL=https://rtukhuijpcljqzqkqoxz.supabase.co
    NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
@@ -69,6 +69,37 @@ Follow these steps to finalize the fixes:
    - Verify that the application launches without errors
    - Check that authentication works properly
    - Test the AdaptiveLearning functionality to ensure it works with React Query v5
+
+## How We Fixed the Issues
+
+### React Query v5 Compatibility
+
+1. **Issue Identification**: The error message "TypeError: client.defaultQueryOptions is not a function" indicated that we were using React Query v4 syntax with React Query v5.
+
+2. **Files Fixed**:
+   - Updated `AdaptiveLearningContext.tsx` to ensure all React Query operations use the object parameter syntax required for v5.
+   - Verified that `useSuggestions.ts` was already updated correctly to the v5 syntax.
+
+3. **Key Changes**:
+   - Changed from positional parameters to object parameters in query and mutation calls
+   - Updated typings where necessary
+   - Removed usage of deprecated methods like `client.defaultQueryOptions`
+
+### Supabase Environment Variables
+
+1. **Created .env.local file**: The application needed Supabase environment variables:
+   ```
+   NEXT_PUBLIC_SUPABASE_URL=https://rtukhuijpcljqzqkqoxz.supabase.co
+   NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+   ```
+
+2. **Environment Variable Handling**: Ensured that the application correctly reads these variables or uses fallbacks in development.
+
+### Module Resolution
+
+1. **Confirmed Dependencies**: The `bufferutil` and `utf-8-validate` modules are listed in the dependencies section of `package.json`.
+
+2. **Installation Process**: Running `npm install` will install these dependencies properly.
 
 ## Additional Recommendations
 
