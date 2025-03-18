@@ -13,7 +13,7 @@ import { Suggestion, SuggestionPreferences, SuggestionFeedback } from '@/lib/sug
 export const useSuggestions = (userId?: string, enabled = true) => {
   return useQuery({
     queryKey: ['suggestions', userId],
-    queryFn: () => getSuggestions(userId!),
+    queryFn: () => userId ? getSuggestions(userId) : Promise.resolve([]),
     enabled: !!userId && enabled,
     staleTime: 5 * 60 * 1000, // 5 minutes
     refetchOnWindowFocus: false,
@@ -86,7 +86,22 @@ export const useSubmitFeedback = () => {
 export const usePreferences = (userId?: string, enabled = true) => {
   return useQuery({
     queryKey: ['preferences', userId],
-    queryFn: () => getPreferences(userId!),
+    queryFn: () => userId ? getPreferences(userId) : Promise.resolve({
+      enabled: true,
+      categoriesEnabled: {
+        productivity: true,
+        communication: true,
+        transportation: true,
+        food: true,
+        entertainment: true,
+        system: true
+      },
+      minRelevanceThreshold: 0.6,
+      maxSuggestionsPerDay: 10,
+      maxSuggestionsVisible: 3,
+      suggestionsDisplayMode: 'both',
+      sensitivityLevel: 'medium'
+    }),
     enabled: !!userId && enabled,
     staleTime: 10 * 60 * 1000, // 10 minutes
     refetchOnWindowFocus: false,
