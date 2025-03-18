@@ -5,16 +5,43 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getSuggestions, dismissSuggestion, implementSuggestion, submitFeedback, getPreferences, updatePreferences } from '@/lib/api/learning';
 import { Suggestion, SuggestionPreferences, SuggestionFeedback } from '@/lib/suggestions';
 
+// Default preferences
+const defaultPreferences = {
+  enabled: true,
+  categoriesEnabled: {
+    productivity: true,
+    communication: true,
+    transportation: true,
+    food: true,
+    entertainment: true,
+    system: true
+  },
+  minRelevanceThreshold: 0.6,
+  maxSuggestionsPerDay: 10,
+  maxSuggestionsVisible: 3,
+  suggestionsDisplayMode: 'both',
+  sensitivityLevel: 'medium'
+};
+
 /**
  * Hook to get suggestions for a user
  * @param userId - User ID
  * @param enabled - Whether to enable the query
  */
 export const useSuggestions = (userId?: string, enabled = true) => {
+  // Simple implementation to avoid the defaultQueryOptions error
   return useQuery({
     queryKey: ['suggestions', userId],
-    queryFn: () => userId ? getSuggestions(userId) : Promise.resolve([]),
-    enabled: !!userId && enabled,
+    queryFn: async () => {
+      if (!userId) return [];
+      try {
+        return await getSuggestions(userId);
+      } catch (error) {
+        console.error('Error fetching suggestions:', error);
+        return [];
+      }
+    },
+    enabled: Boolean(userId) && enabled,
     staleTime: 5 * 60 * 1000, // 5 minutes
     refetchOnWindowFocus: false,
   });
@@ -25,9 +52,11 @@ export const useSuggestions = (userId?: string, enabled = true) => {
  */
 export const useDismissSuggestion = () => {
   const queryClient = useQueryClient();
+  
   return useMutation({
-    mutationFn: ({ suggestionId, userId }: { suggestionId: string; userId: string }) =>
-      dismissSuggestion(suggestionId, userId),
+    mutationFn: async ({ suggestionId, userId }: { suggestionId: string; userId: string }) => {
+      return await dismissSuggestion(suggestionId, userId);
+    },
     onSuccess: (_, variables) => {
       // Update suggestions query data
       queryClient.setQueryData(
@@ -49,9 +78,11 @@ export const useDismissSuggestion = () => {
  */
 export const useImplementSuggestion = () => {
   const queryClient = useQueryClient();
+  
   return useMutation({
-    mutationFn: ({ suggestionId, userId }: { suggestionId: string; userId: string }) =>
-      implementSuggestion(suggestionId, userId),
+    mutationFn: async ({ suggestionId, userId }: { suggestionId: string; userId: string }) => {
+      return await implementSuggestion(suggestionId, userId);
+    },
     onSuccess: (_, variables) => {
       // Update suggestions query data
       queryClient.setQueryData(
@@ -73,8 +104,9 @@ export const useImplementSuggestion = () => {
  */
 export const useSubmitFeedback = () => {
   return useMutation({
-    mutationFn: (feedback: SuggestionFeedback & { userId: string }) =>
-      submitFeedback(feedback)
+    mutationFn: async (feedback: SuggestionFeedback & { userId: string }) => {
+      return await submitFeedback(feedback);
+    }
   });
 };
 
@@ -86,23 +118,16 @@ export const useSubmitFeedback = () => {
 export const usePreferences = (userId?: string, enabled = true) => {
   return useQuery({
     queryKey: ['preferences', userId],
-    queryFn: () => userId ? getPreferences(userId) : Promise.resolve({
-      enabled: true,
-      categoriesEnabled: {
-        productivity: true,
-        communication: true,
-        transportation: true,
-        food: true,
-        entertainment: true,
-        system: true
-      },
-      minRelevanceThreshold: 0.6,
-      maxSuggestionsPerDay: 10,
-      maxSuggestionsVisible: 3,
-      suggestionsDisplayMode: 'both',
-      sensitivityLevel: 'medium'
-    }),
-    enabled: !!userId && enabled,
+    queryFn: async () => {
+      if (!userId) return defaultPreferences;
+      try {
+        return await getPreferences(userId);
+      } catch (error) {
+        console.error('Error fetching preferences:', error);
+        return defaultPreferences;
+      }
+    },
+    enabled: Boolean(userId) && enabled,
     staleTime: 10 * 60 * 1000, // 10 minutes
     refetchOnWindowFocus: false,
   });
@@ -113,14 +138,17 @@ export const usePreferences = (userId?: string, enabled = true) => {
  */
 export const useUpdatePreferences = () => {
   const queryClient = useQueryClient();
+  
   return useMutation({
-    mutationFn: ({
+    mutationFn: async ({
       userId,
       preferences,
     }: {
       userId: string;
       preferences: SuggestionPreferences;
-    }) => updatePreferences(userId, preferences),
+    }) => {
+      return await updatePreferences(userId, preferences);
+    },
     onSuccess: (_, variables) => {
       // Update preferences query data
       queryClient.setQueryData(
