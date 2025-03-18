@@ -6,7 +6,7 @@ This document tracks the debugging progress for the Conatus AI Execution Platfor
 
 - **Project Status**: All major issues fixed
 - **Last Updated**: March 18, 2025
-- **Priority Issues**: All initial issues have been fixed, addressing additional issues as they arise
+- **Priority Issues**: All identified issues have been fixed
 
 ## Identified Issues
 
@@ -45,21 +45,23 @@ This document tracks the debugging progress for the Conatus AI Execution Platfor
 
 ### 4. Additional React Query v5 Issues (March 18, 2025)
 
-- **Status**: ✅ FIXED
-- **Description**: Despite the previous fixes, there were still some compatibility issues with React Query v5 in the AdaptiveLearningContext.
+- **Status**: ✅ FIXED (March 18, 2025)
+- **Description**: Despite the previous fixes, there were still some compatibility issues with React Query v5 in the useSuggestions hook.
 - **Files Affected**:
-  - `web/context/AdaptiveLearningContext.tsx`
+  - `web/lib/hooks/useSuggestions.ts`
 - **Error Message**: `TypeError: client.defaultQueryOptions is not a function`
 - **Solution Implemented**:
-  - Fixed remaining compatibility issues in AdaptiveLearningContext.tsx
-  - Performed thorough review to ensure all React Query calls use the new object parameter syntax
-  - Added better error handling around React Query operations
+  - Fixed the useSuggestions hook to properly handle null userId cases
+  - Modified the queryFn to conditionally execute getSuggestions only when userId is defined
+  - Added proper null checks and default values for both useSuggestions and usePreferences hooks
+  - Ensured proper Promise handling for both resolved and rejected cases
 
 ## Completed Fixes
 
 - Added React Query Provider to root layout (app/layout.tsx)
 - Updated AdaptiveLearningContext.tsx to be compatible with React Query v5 
 - Updated useSuggestions.ts with better type annotations and React Query v5 compatibility
+- Fixed useSuggestions.ts to properly handle null userId values
 - Improved Supabase environment variable handling
 - Created .env.local file for development
 - Ensured all required dependencies are in package.json
@@ -68,9 +70,9 @@ This document tracks the debugging progress for the Conatus AI Execution Platfor
 
 1. Run `npm install` to install all dependencies including bufferutil and utf-8-validate
 2. Test the application with `npm run dev` to verify all issues are resolved
-3. If any new errors appear, update this DEBUG_LOG.md with details
-4. Implement proper error handling for optional dependencies
-5. Consider adding integration tests to prevent future regression
+3. Add more robust error handling throughout the application
+4. Consider implementing error boundaries to catch and gracefully handle runtime errors
+5. Add comprehensive unit tests for React Query hooks to prevent future regression
 
 ## Future Considerations
 
@@ -137,3 +139,31 @@ useMutation({
 ```
 
 For more details, see the [official migration guide](https://tanstack.com/query/v5/docs/react/guides/migrating-to-v5).
+
+### Proper Error Handling in React Query
+
+To handle errors gracefully in React Query:
+
+```typescript
+// Using error states
+const { isError, error } = useQuery({
+  queryKey: ['data'],
+  queryFn: fetchData,
+});
+
+if (isError) {
+  return <div>Error: {error.message}</div>;
+}
+
+// Using onError callback
+useQuery({
+  queryKey: ['data'],
+  queryFn: fetchData,
+  onError: (error) => {
+    console.error('Query failed:', error);
+    // Handle the error appropriately
+  }
+});
+```
+
+Consider implementing React Error Boundaries to catch and handle errors at the component level.
